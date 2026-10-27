@@ -1,7 +1,7 @@
 {
-  "name": "custom-terminal",
+  "name": "pulse-terminal",
   "version": "1.0.0",
-  "description": "Custom terminal",
+  "description": "A fast, multi-tab, themeable terminal for Windows",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -23,8 +23,8 @@
     "electron-builder": "^26.15.3"
   },
   "build": {
-    "appId": "com.ajay.customterminal",
-    "productName": "Custom Terminal",
+    "appId": "com.ajay.pulseterminal",
+    "productName": "Pulse Terminal",
     "npmRebuild": false,
     "directories": {
       "output": "dist"
@@ -43,7 +43,7 @@
       "signExecutable": false
     },
     "portable": {
-      "artifactName": "Custom Terminal.exe"
+      "artifactName": "Pulse Terminal.exe"
     }
   }
 }

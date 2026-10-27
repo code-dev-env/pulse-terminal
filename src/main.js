@@ -32,7 +32,7 @@ let nextId = 1;
 
 // Oh-My-Posh style powerline prompt (src/prompt.ps1). It uses the terminal's ANSI palette, so it follows the theme.
 function promptScript() {
-  const out = path.join(os.tmpdir(), 'custom-terminal-prompt.ps1');
+  const out = path.join(os.tmpdir(), 'pulse-terminal-prompt.ps1');
   fs.writeFileSync(out, fs.readFileSync(path.join(__dirname, 'prompt.ps1'), 'utf8'), 'utf8');
   return out;
 }
@@ -100,7 +100,7 @@ function buildBanner(cpu) {
   } catch {}
 
   const info = [
-    `${B}${OR}Custom Terminal${R} ${DIM}v${app.getVersion()}${R}`,
+    `${B}${OR}Pulse Terminal${R} ${DIM}v${app.getVersion()}${R}`,
     DIM + '─'.repeat(40) + R,
     `${L}User${R}    ${os.userInfo().username}@${os.hostname()}`,
     `${L}OS${R}      ${os.version()} (${os.release()})`,
@@ -130,7 +130,7 @@ function createWindow() {
     transparent: true,
     backgroundColor: '#00000000',
     icon: path.join(__dirname, 'icon.png'),
-    title: 'Custom Terminal',
+    title: 'Pulse Terminal',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -153,7 +153,7 @@ function createWindow() {
 
 ipcMain.handle('pty:create', async (e, { cols, rows }) => {
   const id = nextId++;
-  const banner = path.join(os.tmpdir(), `custom-terminal-banner-${id}-${process.pid}.txt`);
+  const banner = path.join(os.tmpdir(), `pulse-terminal-banner-${id}-${process.pid}.txt`);
   fs.writeFileSync(banner, buildBanner(await cpuUsage()), 'utf8');
   const p = pty.spawn('powershell.exe', ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${promptScript()}'`], {
     name: 'xterm-256color',
