@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Custom Terminal</title>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="rs rs-n" data-edge="n"></div><div class="rs rs-s" data-edge="s"></div><div class="rs rs-e" data-edge="e"></div><div class="rs rs-w" data-edge="w"></div><div class="rs rs-ne" data-edge="ne"></div><div class="rs rs-nw" data-edge="nw"></div><div class="rs rs-se" data-edge="se"></div><div class="rs rs-sw" data-edge="sw"></div>
+
+  <div id="titlebar">
+    <div id="tabs"></div>
+    <button id="new-tab" title="New tab (Ctrl+T)">+</button>
+    <div id="drag-fill"></div>
+    <button id="quick-btn" title="Quick commands">Quick commands
+      <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M1 2.5l3 3 3-3"/></svg>
+    </button>
+    <button id="settings-btn" title="Settings">
+      <svg width="16" height="16" viewBox="0 0 16 16" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12" fill="none"/><circle cx="5" cy="4" r="1.7" fill="currentColor"/><circle cx="11" cy="8" r="1.7" fill="currentColor"/><circle cx="6.5" cy="12" r="1.7" fill="currentColor"/></svg>
+    </button>
+    <div id="winctl">
+      <button id="w-min" title="Minimize"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor"><path d="M0 5.5h10"/></svg></button>
+      <button id="w-max" title="Maximize">
+        <svg class="ic-max" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor"><rect x="0.5" y="0.5" width="9" height="9"/></svg>
+        <svg class="ic-restore" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor"><path d="M2.5 2.5V0.5h7v7h-2"/><rect x="0.5" y="2.5" width="7" height="7"/></svg>
+      </button>
+      <button id="w-close" title="Close"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+    </div>
+  </div>
+
+  <div id="quick-menu" class="hidden">
+    <div id="quick-list"></div>
+    <div id="quick-add">
+      <input id="quick-input" placeholder="Add a command…" spellcheck="false">
+      <button id="quick-add-btn">Add</button>
+    </div>
+  </div>
+
+  <div id="terminals"></div>
+
+  <div id="settings" class="hidden">
+    <div class="sheet">
+      <div class="sheet-head"><h2>Settings</h2><button id="settings-close">Done</button></div>
+      <h3>Transparency</h3>
+      <div class="slider-row">
+        <input type="range" id="opacity" min="10" max="100" step="1" value="100">
+        <span id="opacity-val">100%</span>
+      </div>
+      <h3>Theme</h3>
+      <div id="theme-grid"></div>
+    </div>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
