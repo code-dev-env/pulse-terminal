@@ -17,6 +17,22 @@ const RAW = [
   ['Ayu Mirage',       '#1f2430', '#2a3040', '#cccac2', '#ffcc66', '#707a8c', ['#191e2a','#ed8274','#a6cc70','#fad07b','#6dcbfa','#cfbafa','#90e1c6','#c7c7c7']],
   ['Everforest',       '#2d353b', '#343f44', '#d3c6aa', '#a7c080', '#859289', ['#475258','#e67e80','#a7c080','#dbbc7f','#7fbbb3','#d699b6','#83c092','#d3c6aa']],
   ['Cyberpunk',        '#0b0014', '#1a0b2e', '#f0e6ff', '#ff2a6d', '#7a5c99', ['#1a0b2e','#ff2a6d','#05ffa1','#fffb96','#01c8ee','#b967ff','#05d9e8','#d1f7ff']],
+  ['Deep Ocean',       '#0a2540', '#12365c', '#d6e9ff', '#4cc9f0', '#6a8bb0', ['#0e2f52','#ff6b81','#5be3a3','#ffd166','#4ea8ff','#c39bff','#4cc9f0','#d6e9ff']],
+  ['Forest',           '#12301f', '#1b4230', '#dcefd9', '#7bd88f', '#6f9a7c', ['#1b4230','#ef7d6f','#7bd88f','#e6d36a','#6fb7d9','#c59be0','#6fd8c1','#dcefd9']],
+  ['Burgundy',         '#3a0f1c', '#4d1827', '#f5dde2', '#ff7a93', '#a56a77', ['#4d1827','#ff6b6b','#9be28c','#ffd479','#7fb4ff','#e59bff','#7fe0d6','#f5dde2']],
+  ['Royal Purple',     '#2a1450', '#3a1f6b', '#eadfff', '#b388ff', '#8c75b8', ['#3a1f6b','#ff6e9c','#6ef0a8','#ffe06b','#7aa7ff','#d58bff','#6ee3f5','#eadfff']],
+  ['Sunset',           '#3b1f14', '#4f2d1c', '#ffe8d1', '#ff9a4d', '#a8805f', ['#4f2d1c','#ff6b5b','#a8d86b','#ffcf5a','#6fa8e8','#e58bc4','#6fd1c0','#ffe8d1']],
+  ['Teal Lagoon',      '#0b3b3c', '#115052', '#d9f5f2', '#2de2c8', '#6aa5a3', ['#115052','#ff7a7a','#7af0a0','#f5de6b','#5db8ff','#c79bff','#2de2c8','#d9f5f2']],
+  ['Crimson Night',    '#1c0a0d', '#2d1216', '#f2dcdc', '#ff3b4e', '#9a6065', ['#2d1216','#ff3b4e','#6fdc8c','#ffc857','#5a9bff','#d070ff','#5fd9d0','#f2dcdc']],
+  ['Synthwave',        '#241b4b', '#31256a', '#f3e8ff', '#ff4fd8', '#8e7ac0', ['#31256a','#ff5f8f','#72f1b8','#fede5d','#36c4ff','#ff4fd8','#2de2e6','#f3e8ff']],
+  ['Matrix',           '#030d05', '#0a1c0e', '#8dff9d', '#00ff41', '#3f8a4f', ['#0a1c0e','#ff5555','#00ff41','#d6ff5a','#3fb6ff','#c06bff','#3fffd0','#8dff9d']],
+  ['Coffee',           '#2b1d14', '#3b2a1e', '#efdcc6', '#d9a066', '#947a63', ['#3b2a1e','#e0705f','#a5c26b','#e5b95a','#7aa5c9','#c490b5','#7bbfb0','#efdcc6']],
+  ['Slate Blue',       '#2b3a55', '#364868', '#e3eaf7', '#8fb5ff', '#7a8cab', ['#364868','#ff7f8f','#8fe0a8','#f5d77a','#8fb5ff','#d3a5ff','#7fdcf0','#e3eaf7']],
+  ['Sky Light',        '#e8f4ff', '#d3e8fa', '#17324d', '#1e88e5', '#6b8aa6', ['#17324d','#d32f2f','#2e8b57','#b58900','#1e88e5','#8e44ad','#00838f','#9fb4c7']],
+  ['Mint Light',       '#e6f7ef', '#d0eedf', '#16352a', '#12a37a', '#6a9484', ['#16352a','#d3455b','#12a37a','#b58900','#2f7fd1','#9b59b6','#0f9aa8','#9ec2b2']],
+  ['Rose Light',       '#fff0f3', '#ffdde4', '#4a1f2a', '#e0446a', '#a8707c', ['#4a1f2a','#d32f4f','#2e8b57','#c58a00','#3b7dd8','#a64ca6','#18929e','#d9b3bb']],
+  ['Lavender Light',   '#f1ecff', '#e1d8fb', '#2c2150', '#7c4dff', '#8a7fb0', ['#2c2150','#d33a63','#2e8b57','#b58900','#4a6fe0','#7c4dff','#1a8fa0','#b9afd9']],
+  ['Paper',            '#faf4e6', '#eee5cf', '#3b3426', '#c0612b', '#9b9078', ['#3b3426','#c0392b','#4f8a2b','#b58900','#2c6fb0','#8e4a9e','#1f8a8a','#c9bfa6']],
 ];
 
 const rgba = (hex, a) => {
@@ -47,6 +63,21 @@ let themeIdx = Math.max(0, THEMES.findIndex((t) => t.name === load('themeName', 
 let opacity = load('opacity', 100);
 let fontSize = load('fontSize', 14);
 let quick = load('quick', QUICK_DEFAULTS);
+let lineHeight = load('lineHeight', 1.2);
+const FONTS = [
+  ['CaskaydiaCove Nerd Font (bundled)', "'CaskaydiaCove NF'"],
+  ['Cascadia Mono', "'Cascadia Mono'"],
+  ['Cascadia Code', "'Cascadia Code'"],
+  ['Consolas', 'Consolas'],
+  ['Lucida Console', "'Lucida Console'"],
+  ['Courier New', "'Courier New'"],
+  ['JetBrains Mono', "'JetBrains Mono'"],
+  ['Fira Code', "'Fira Code'"],
+  ['Source Code Pro', "'Source Code Pro'"],
+];
+let fontIdx = Math.max(0, FONTS.findIndex((f) => f[0] === load('fontName', FONTS[0][0])));
+// the bundled Nerd Font stays in the chain so prompt glyphs keep rendering whichever font is picked
+const fontStack = () => `${FONTS[fontIdx][1]}, 'CaskaydiaCove NF', 'Cascadia Mono', Consolas, monospace`;
 
 const tabs = []; // { id, el, pane, term, fit }
 let active = null;
@@ -95,8 +126,8 @@ async function newTab() {
   termsEl.appendChild(pane);
 
   const term = new Terminal({
-    fontFamily: "'CaskaydiaCove NF', 'Cascadia Mono', Consolas, monospace",
-    fontSize, lineHeight: 1.2, allowTransparency: true, cursorBlink: true, cursorStyle: 'bar', allowProposedApi: true,
+    fontFamily: fontStack(),
+    fontSize, lineHeight, allowTransparency: true, cursorBlink: true, cursorStyle: 'bar', allowProposedApi: true,
     scrollback: 10000, overviewRuler: { width: 6 }, theme: THEMES[themeIdx].xterm,
     // ConPTY reflows the screen itself on resize; without this xterm reflows too and the two fight, losing/misplacing text
     windowsPty: { backend: 'conpty', buildNumber: window.term.winBuild },
@@ -110,12 +141,20 @@ async function newTab() {
   const id = await window.term.create(term.cols, term.rows);
   const el = document.createElement('div');
   el.className = 'tab';
+  el.draggable = true;
   el.innerHTML = `<span class="label">PowerShell ${++tabCount}</span><span class="x">×</span>`;
   const tab = { id, el, pane, term, fit };
   tabs.push(tab);
   tabsEl.appendChild(el);
 
   term.onData((d) => window.term.write(id, d));
+  // right-click / menu pastes arrive as native paste events; route them through pasteText too
+  pane.addEventListener('paste', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const t = e.clipboardData.getData('text');
+    if (t) pasteText(id, t);
+  }, true);
+  enableClickToMove(term, pane, id);
   // ConPTY redraws its whole viewport on every resize, so only the settled size is sent to it.
   let resizeTimer = null, sent = { cols: term.cols, rows: term.rows };
   term.onResize(({ cols, rows }) => {
@@ -130,13 +169,73 @@ async function newTab() {
   term.onTitleChange((t) => { if (t && !/\.exe$/i.test(t.trim())) el.querySelector('.label').textContent = t.split(/[\\/]/).pop().slice(0, 24) || t; });
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
-    if (e.ctrlKey && e.shiftKey && e.code === 'KeyC') { navigator.clipboard.writeText(term.getSelection()); return false; }
-    if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') { navigator.clipboard.readText().then((t) => term.paste(t)); return false; }
+    if (e.ctrlKey && !e.altKey && e.code === 'KeyC' && (e.shiftKey || term.hasSelection())) {
+      navigator.clipboard.writeText(term.getSelection());
+      if (!e.shiftKey) term.clearSelection();
+      return false;
+    }
+    if (e.ctrlKey && !e.altKey && e.code === 'KeyV') {
+      e.preventDefault(); // otherwise the textarea's native paste fires too and the text lands twice
+      navigator.clipboard.readText().then((t) => t && pasteText(id, t));
+      return false;
+    }
+    // ESC+CR (Alt+Enter) is bound to AddLine in prompt.ps1
+    if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === 'Enter') {
+      e.preventDefault(); // suppresses the keypress event, which xterm would otherwise turn into a plain Enter
+      window.term.write(id, '\x1b\r');
+      return false;
+    }
     return true;
   });
+  el.addEventListener('dragstart', (e) => { dragTab = tab; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); setTimeout(() => el.classList.add('dragging'), 0); });
+  el.addEventListener('dragend', () => { dragTab = null; el.classList.remove('dragging'); });
   el.addEventListener('click', () => select(tab));
   el.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); window.term.kill(id); closeTab(tab); });
   select(tab);
+}
+
+// Dragging a tab left/right reorders it live: it moves before the first tab whose midpoint is right of the pointer.
+let dragTab = null;
+tabsEl.addEventListener('dragover', (e) => {
+  if (!dragTab) return;
+  e.preventDefault();
+  const others = tabs.filter((t) => t !== dragTab);
+  const next = others.find((t) => { const r = t.el.getBoundingClientRect(); return e.clientX < r.left + r.width / 2; });
+  const from = tabs.indexOf(dragTab);
+  tabs.splice(from, 1);
+  tabs.splice(next ? tabs.indexOf(next) : tabs.length, 0, dragTab);
+  if (next) { if (dragTab.el.nextSibling !== next.el) tabsEl.insertBefore(dragTab.el, next.el); }
+  else if (tabsEl.lastChild !== dragTab.el) tabsEl.appendChild(dragTab.el);
+});
+tabsEl.addEventListener('drop', (e) => e.preventDefault());
+
+// A raw newline would run the pasted line immediately; Alt+Enter (AddLine in prompt.ps1) just starts a new line.
+function pasteText(id, text) {
+  window.term.write(id, text.replace(/(\r\n|\r|\n)+$/, '').replace(/\r\n|\r|\n/g, '\x1b\r'));
+}
+
+// Clicking inside the line being typed moves the cursor there by sending the right number of arrow keys.
+function enableClickToMove(term, pane, id) {
+  let down = null;
+  pane.addEventListener('mousedown', (e) => { down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null; });
+  pane.addEventListener('mouseup', (e) => {
+    if (!down || e.button !== 0) return;
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+    down = null;
+    const buf = term.buffer.active;
+    if (moved > 4 || term.hasSelection() || buf.type !== 'normal') return;
+    const screen = term.element.querySelector('.xterm-screen').getBoundingClientRect();
+    const col = Math.floor((e.clientX - screen.left) / (screen.width / term.cols));
+    const row = Math.floor((e.clientY - screen.top) / (screen.height / term.rows));
+    if (col < 0 || col >= term.cols || row < 0 || row >= term.rows) return;
+    // the editable region is the cursor's line plus the wrapped rows around it
+    let first = buf.cursorY, last = buf.cursorY;
+    while (first > 0 && buf.getLine(buf.viewportY + first)?.isWrapped) first--;
+    while (last < term.rows - 1 && buf.getLine(buf.viewportY + last + 1)?.isWrapped) last++;
+    if (row < first || row > last) return;
+    const delta = (row * term.cols + col) - (buf.cursorY * term.cols + buf.cursorX);
+    if (delta) window.term.write(id, (delta > 0 ? '\x1b[C' : '\x1b[D').repeat(Math.abs(delta)));
+  });
 }
 
 function select(tab) {
@@ -177,6 +276,31 @@ function setFont(n) {
   localStorage.setItem('fontSize', fontSize);
   tabs.forEach((t) => { t.term.options.fontSize = fontSize; t.fit.fit(); });
 }
+
+function setLineHeight(n) {
+  lineHeight = Math.min(2, Math.max(1, Math.round(n * 100) / 100));
+  localStorage.setItem('lineHeight', lineHeight);
+  tabs.forEach((t) => { t.term.options.lineHeight = lineHeight; t.fit.fit(); });
+}
+
+function setFontFamily(i) {
+  fontIdx = i;
+  localStorage.setItem('fontName', JSON.stringify(FONTS[i][0]));
+  tabs.forEach((t) => { t.term.options.fontFamily = fontStack(); t.fit.fit(); });
+}
+
+const fontSel = $('font-family');
+FONTS.forEach(([name], i) => {
+  const o = document.createElement('option');
+  o.value = i; o.textContent = name; o.style.fontFamily = FONTS[i][1];
+  fontSel.appendChild(o);
+});
+fontSel.value = fontIdx;
+fontSel.onchange = () => setFontFamily(Number(fontSel.value));
+const lhSlider = $('line-height');
+lhSlider.value = lineHeight;
+$('line-height-val').textContent = lineHeight.toFixed(2);
+lhSlider.oninput = () => { setLineHeight(Number(lhSlider.value)); $('line-height-val').textContent = lineHeight.toFixed(2); };
 
 /* ---------- quick commands ---------- */
 const menu = $('quick-menu');

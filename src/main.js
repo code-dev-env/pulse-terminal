@@ -6,6 +6,22 @@ const pty = require('node-pty');
 
 let win;
 
+// The portable exe unpacks the app to one fixed folder in %TEMP% and its launcher deletes that folder when its process exits,
+// so a second portable instance closing would pull the files out from under the first. Keep it single-instance there, and make
+// the extra process wait (hidden) until the first one quits instead of exiting right away.
+// The installed build runs from a permanent folder, so it has no lock and every launch opens its own window.
+const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
+const secondPortable = isPortable && !app.requestSingleInstanceLock();
+if (secondPortable) {
+  const wait = setInterval(() => { if (app.requestSingleInstanceLock()) { clearInterval(wait); app.quit(); } }, 500);
+} else if (isPortable) {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
+}
+
 // A transparent Electron window has no native resize frame, so Windows won't offer Snap Layouts or edge snapping.
 // Adding WS_THICKFRAME / WS_MAXIMIZEBOX / WS_MINIMIZEBOX to it restores those.
 function enableNativeSnap(w) {
@@ -21,6 +37,14 @@ function enableNativeSnap(w) {
     const style = Number(GetStyle(hwnd, GWL_STYLE));
     SetStyle(hwnd, GWL_STYLE, style | 0x00040000 | 0x00010000 | 0x00020000);
     SetPos(hwnd, null, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020);
+    // WS_THICKFRAME makes DWM draw its own square border/backdrop behind the page; round it and drop the border
+    try {
+      const SetAttr = koffi.load('dwmapi.dll').func('int __stdcall DwmSetWindowAttribute(void* hWnd, uint attr, int *val, uint size)');
+      SetAttr(hwnd, 33, [2], 4);           // DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND
+      SetAttr(hwnd, 34, [0xFFFFFFFE], 4);  // DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE
+    } catch (err) {
+      console.error('DWM corner attributes unavailable:', err.message);
+    }
     return true;
   } catch (err) {
     console.error('native snap unavailable:', err.message);
@@ -32,7 +56,7 @@ let nextId = 1;
 
 // Oh-My-Posh style powerline prompt (src/prompt.ps1). It uses the terminal's ANSI palette, so it follows the theme.
 function promptScript() {
-  const out = path.join(os.tmpdir(), 'pulse-terminal-prompt.ps1');
+  const out = path.join(os.tmpdir(), `pulse-terminal-prompt-${process.pid}.ps1`);
   fs.writeFileSync(out, fs.readFileSync(path.join(__dirname, 'prompt.ps1'), 'utf8'), 'utf8');
   return out;
 }
@@ -151,18 +175,40 @@ function createWindow() {
   }
 }
 
+// PowerShell 7+ (pwsh) if installed, else null so the caller falls back to the inbox Windows PowerShell 5.1
+function findPwsh() {
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  // PATH can be incomplete when the packaged exe is launched from Explorer/a shortcut, so also try the known install spots
+  dirs.push(
+    path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Microsoft', 'WindowsApps'),
+    path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7'),
+  );
+  for (const d of dirs) {
+    const f = path.join(d, 'pwsh.exe');
+    // The Store/winget install is an app-execution alias (reparse point): existsSync/statSync fail on it with EACCES, lstat doesn't
+    try { fs.lstatSync(f); return f; } catch {}
+  }
+  return null;
+}
+
 ipcMain.handle('pty:create', async (e, { cols, rows }) => {
   const id = nextId++;
   const banner = path.join(os.tmpdir(), `pulse-terminal-banner-${id}-${process.pid}.txt`);
   fs.writeFileSync(banner, buildBanner(await cpuUsage()), 'utf8');
-  const p = pty.spawn('powershell.exe', ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${promptScript()}'`], {
+  const shellArgs = ['-NoLogo', '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', `. '${promptScript()}'`];
+  const spawnShell = (exe) => pty.spawn(exe, shellArgs, {
     name: 'xterm-256color',
     cols, rows,
     cwd: fs.existsSync('D:\\Ajay') ? 'D:\\Ajay' : os.homedir(),
     env: { ...process.env, CT_BANNER: banner },
     useConpty: true,
-    useConptyDll: true,
+    // The bundled conpty.dll never repaints on resize, so xterm's reflow and ConPTY's drift apart and PSReadLine then draws at a stale row.
+    // The inbox ConPTY repaints its whole viewport on every resize, which keeps xterm in sync.
+    useConptyDll: false,
   });
+  let p;
+  try { p = spawnShell(findPwsh() || 'powershell.exe'); }
+  catch { p = spawnShell('powershell.exe'); }
   ptys.set(id, p);
   p.onData((d) => {
     if (win.isDestroyed()) return;
@@ -243,7 +289,7 @@ ipcMain.on('win:rs-end', () => { clearInterval(resizeTimer); resizeTimer = null;
 ipcMain.on('win:close', () => win.close());
 ipcMain.handle('win:ismax', () => (nativeSnap ? win.isMaximized() : maxed));
 
-app.whenReady().then(createWindow);
+if (!secondPortable) app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {
   ptys.forEach((p) => p.kill());
   app.quit();

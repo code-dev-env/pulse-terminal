@@ -12,11 +12,12 @@ button { font-family:inherit; }
   -webkit-app-region:drag; background:linear-gradient(var(--bg2a), var(--bga));
   border-bottom:1px solid rgba(128,128,128,.22); }
 
-#tabs { display:flex; gap:4px; min-width:0; }
-.tab { -webkit-app-region:no-drag; display:flex; align-items:center; gap:8px; height:28px; padding:0 12px;
+#tabs { display:flex; gap:4px; min-width:0; overflow-x:auto; scrollbar-width:none; }
+.tab { -webkit-app-region:no-drag; min-width:120px; box-sizing:border-box; flex-shrink:0; display:flex; align-items:center; gap:8px; height:28px; padding:0 12px;
   border-radius:7px; color:var(--muted); font-size:12.5px; cursor:default; transition:background .15s,color .15s; }
 .tab:hover { background:rgba(128,128,128,.14); }
 .tab.active { background:rgba(128,128,128,.24); color:var(--fg); }
+.tab .label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tab .x { opacity:0; font-size:14px; line-height:1; border-radius:4px; padding:0 3px; }
 .tab:hover .x, .tab.active .x { opacity:.6; }
 .tab .x:hover { background:rgba(128,128,128,.3); opacity:1; }
@@ -81,6 +82,8 @@ body.maximized #w-max .ic-restore { display:block; }
 
 .slider-row { display:flex; align-items:center; gap:14px; }
 .slider-row input { flex:1; accent-color:var(--accent); }
+.slider-row select { flex:1; padding:7px 10px; border-radius:6px; border:1px solid rgba(128,128,128,.3); background:var(--bg); color:var(--fg); font-size:13px; outline:none; }
+.tab.dragging { opacity:.4; }
 .slider-row span { width:44px; text-align:right; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
 
 /* xterm paints itself black by default; let the page background (theme color + alpha) show through */

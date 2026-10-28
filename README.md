@@ -4,13 +4,16 @@ A fast, multi-tab, fully customizable terminal for Windows, built with Electron 
 
 ## Features
 
-- **Multi-tab sessions**, each backed by its own PowerShell process through ConPTY ([node-pty](https://github.com/microsoft/node-pty)).
-- **18 built-in color themes**, including Dracula, Nord, Gruvbox, Tokyo Night, Catppuccin Mocha, Solarized (dark and light), and more.
+- **Multi-tab sessions**, each backed by its own shell process through ConPTY ([node-pty](https://github.com/microsoft/node-pty)). Tabs can be reordered by dragging and scroll horizontally when they overflow.
+- **PowerShell 7 support**: uses `pwsh` when installed and falls back to Windows PowerShell 5.1.
+- **33 built-in color themes**, dark and light, including Dracula, Nord, Gruvbox, Tokyo Night, Catppuccin Mocha, Solarized, Synthwave, Matrix, Paper, and more.
 - **Powerline-style prompt** showing user, working directory, and git branch with a dirty-state indicator. It uses the terminal's ANSI palette, so it follows the active theme.
-- **Startup banner** with a mascot and a system snapshot (OS, CPU, memory, disk, uptime). It is redrawn when you run `clear`, `cls`, or press `Ctrl+L`.
+- **Startup banner** with a mascot and a system snapshot (OS, CPU, memory, disk, uptime).
 - **Quick commands**: a customizable list of commands you can run with one click.
-- **Adjustable window opacity** and font size, saved between sessions.
-- **Native window behavior**: Windows Snap Layouts and edge snapping on the frameless, transparent window.
+- **Adjustable window opacity, font family, font size, and line height**, saved between sessions.
+- **Editing conveniences**: click inside the current input line to move the cursor, multi-line input with `Shift+Enter` / `Alt+Enter`, and multi-line paste that doesn't execute immediately.
+- **Native window behavior**: Windows Snap Layouts and edge snapping on the frameless and transparent window.
+- **Portable build is single-instance**: launching it again focuses the running window.
 - Bundled [Cascadia Code Nerd Font](https://www.nerdfonts.com/) (CaskaydiaCove NF) for prompt glyphs.
 
 ## Requirements
@@ -45,8 +48,10 @@ The portable build is written to `dist/Pulse Terminal.exe`.
 | `Ctrl+T` | New tab |
 | `Ctrl+W` | Close current tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
-| `Ctrl+Shift+C` | Copy selection |
-| `Ctrl+Shift+V` | Paste |
+| `Ctrl+C` / `Ctrl+Shift+C` | Copy selection (`Ctrl+C` copies only when text is selected, otherwise it interrupts) |
+| `Ctrl+V` / `Ctrl+Shift+V` | Paste |
+| `Shift+Enter` / `Alt+Enter` | Insert a new line without running the command |
+| `Ctrl+Z` | Undo back to the previous word boundary |
 | `Ctrl++` / `Ctrl+-` | Increase / decrease font size |
 | `Ctrl+0` | Reset font size |
 | `Ctrl+L` | Clear screen and redraw banner |
@@ -68,7 +73,7 @@ build/           App icon and icon generation script
 
 ## Configuration
 
-Theme, font size, opacity, and quick commands are stored in the app's local storage and can be changed from the Settings panel.
+Theme, font family, font size, line height, opacity, and quick commands are stored in the app's local storage and can be changed from the Settings panel.
 
 ## Contributing
 

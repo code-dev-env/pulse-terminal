@@ -32,7 +32,43 @@ try {
     [Microsoft.PowerShell.PSConsoleReadLine]::Insert('Clear-Console')
     [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
   }
+  Set-PSReadLineKeyHandler -Chord Alt+Enter -Function AddLine
+  # PSReadLine undoes one keystroke per press; undo back to the previous word boundary instead
+  Set-PSReadLineKeyHandler -Chord Ctrl+z -ScriptBlock {
+    $line = $null; $cur = 0
+    for ($i = 0; $i -lt 200; $i++) {
+      [Microsoft.PowerShell.PSConsoleReadLine]::Undo()
+      [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cur)
+      if ($cur -le 0 -or $line[$cur - 1] -match '\s') { break }
+    }
+  }
 } catch {}
+
+# PSReadLine 2.0 caches the row where the input starts (_initialY) and never refreshes it when the console is resized,
+# so after a resize (maximize, moving between monitors) typed text is drawn at a stale row. While it idles at the prompt,
+# re-anchor that row to the real cursor row. Only runs for a few seconds after a size change.
+if ($PSVersionTable.PSVersion.Major -lt 6) { try {
+  $script:flags = [Reflection.BindingFlags]'NonPublic,Instance'
+  $script:rl = [Microsoft.PowerShell.PSConsoleReadLine]
+  $script:fY = $script:rl.GetField('_initialY', $script:flags)
+  $script:fCur = $script:rl.GetField('_current', $script:flags)
+  $script:toPoint = $script:rl.GetMethod('ConvertOffsetToPoint', $script:flags)
+  $script:size = ''
+  $script:changed = [Diagnostics.Stopwatch]::StartNew()
+  if ($script:fY -and $script:fCur -and $script:toPoint) {
+    function global:Sync-ReadLine {
+      $s = $script:rl.GetField('_singleton', 'NonPublic,Static').GetValue($null)
+      $size = "$([Console]::WindowWidth)x$([Console]::WindowHeight)"
+      if ($size -ne $script:size) { $script:size = $size; $script:changed.Restart() }
+      if ($script:changed.ElapsedMilliseconds -gt 2500) { return }
+      $y = $script:fY.GetValue($s)
+      $row = $script:toPoint.Invoke($s, @([int]$script:fCur.GetValue($s))).Y
+      $want = [Console]::CursorTop - ($row - $y)
+      if ($want -ne $y -and $want -ge 0) { $script:fY.SetValue($s, $want) }
+    }
+    $null = Register-EngineEvent -SourceIdentifier PowerShell.OnIdle -Action { try { Sync-ReadLine } catch {} }
+  }
+} catch {} }
 
 function global:prompt {
   $ok = $?
