@@ -635,23 +635,31 @@ const THEMES = RAW.map(([name, bg, bg2, fg, accent, muted, a]) => {
   return { name, ui: { bg, bg2, fg, accent, muted }, xterm, ansi: a };
 });
 
-const QUICK_DEFAULTS = [
-  "cd ..",
-  "cd ../..",
-  "cd ~",
-  "D:",
-  "C:",
-  "ls",
-  "git status",
-  "clear",
-];
+// Shell-agnostic starters; anyone can add or remove their own from the Quick commands menu
+const QUICK_DEFAULTS = ["cd ..", "cd ../..", "cd ~", "ls", "git status", "clear"];
 
-const load = (k, d) => {
-  try {
-    return JSON.parse(localStorage.getItem(k)) ?? d;
-  } catch {
-    return d;
+// Settings live in a JSON file owned by the main process, so they survive restarts and every window sees the same ones.
+const S = window.term.settings;
+if (!S._migrated) {
+  // one-time import of values an earlier version kept in this page's localStorage
+  for (const k of ["themeName", "opacity", "fontSize", "lineHeight", "fontName", "quick"]) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (S[k] === undefined && raw !== null) {
+        S[k] = JSON.parse(raw);
+        window.term.setSetting(k, S[k]);
+      }
+    } catch {}
   }
+  window.term.setSetting("_migrated", true);
+}
+const load = (k, d) => S[k] ?? d;
+// changes are saved automatically, a moment after the last one (so dragging a slider isn't a write per pixel)
+const saveTimers = {};
+const save = (k, v) => {
+  S[k] = v;
+  clearTimeout(saveTimers[k]);
+  saveTimers[k] = setTimeout(() => window.term.setSetting(k, v), 250);
 };
 let themeIdx = Math.max(
   0,
@@ -659,26 +667,44 @@ let themeIdx = Math.max(
 );
 let opacity = load("opacity", 100);
 let fontSize = load("fontSize", 14);
-let quick = load("quick", QUICK_DEFAULTS);
+let quick = [...load("quick", QUICK_DEFAULTS)];
 let lineHeight = load("lineHeight", 1.2);
-const FONTS = [
-  ["CaskaydiaCove Nerd Font (bundled)", "'CaskaydiaCove NF'"],
-  ["Cascadia Mono", "'Cascadia Mono'"],
-  ["Cascadia Code", "'Cascadia Code'"],
-  ["Consolas", "Consolas"],
-  ["Lucida Console", "'Lucida Console'"],
-  ["Courier New", "'Courier New'"],
-  ["JetBrains Mono", "'JetBrains Mono'"],
-  ["Fira Code", "'Fira Code'"],
-  ["Source Code Pro", "'Source Code Pro'"],
-];
+const IS_WIN = window.term.platform === "win32";
+// fonts offered per platform; the first entry is always the bundled one, and an unknown saved name falls back to it
+const FONTS = IS_WIN
+  ? [
+      ["CaskaydiaCove Nerd Font (bundled)", "'CaskaydiaCove NF'"],
+      ["Cascadia Mono", "'Cascadia Mono'"],
+      ["Cascadia Code", "'Cascadia Code'"],
+      ["Consolas", "Consolas"],
+      ["Lucida Console", "'Lucida Console'"],
+      ["Courier New", "'Courier New'"],
+      ["JetBrains Mono", "'JetBrains Mono'"],
+      ["Fira Code", "'Fira Code'"],
+      ["Source Code Pro", "'Source Code Pro'"],
+    ]
+  : [
+      ["CaskaydiaCove Nerd Font (bundled)", "'CaskaydiaCove NF'"],
+      ["DejaVu Sans Mono", "'DejaVu Sans Mono'"],
+      ["Ubuntu Mono", "'Ubuntu Mono'"],
+      ["Liberation Mono", "'Liberation Mono'"],
+      ["Noto Sans Mono", "'Noto Sans Mono'"],
+      ["Hack", "Hack"],
+      ["Cascadia Code", "'Cascadia Code'"],
+      ["JetBrains Mono", "'JetBrains Mono'"],
+      ["Fira Code", "'Fira Code'"],
+      ["Source Code Pro", "'Source Code Pro'"],
+    ];
 let fontIdx = Math.max(
   0,
   FONTS.findIndex((f) => f[0] === load("fontName", FONTS[0][0])),
 );
 // the bundled Nerd Font stays in the chain so prompt glyphs keep rendering whichever font is picked
 const fontStack = () =>
-  `${FONTS[fontIdx][1]}, 'CaskaydiaCove NF', 'Cascadia Mono', Consolas, monospace`;
+  `${FONTS[fontIdx][1]}, 'CaskaydiaCove NF', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace`;
+
+// no window transparency (Linux fallback): the page paints an opaque, square background
+if (window.term.opaque) document.body.classList.add("opaque");
 
 const tabs = []; // { id, el, pane, term, fit }
 let active = null;
@@ -693,22 +719,32 @@ function applyTheme() {
   const t = THEMES[themeIdx];
   const r = document.documentElement.style;
   for (const [k, v] of Object.entries(t.ui)) r.setProperty("--" + k, v);
-  const a = opacity / 100;
-  r.setProperty("--bga", rgba(t.ui.bg, a));
-  r.setProperty("--bg2a", rgba(t.ui.bg2, a));
+  applyOpacity();
   tabs.forEach((tab) => (tab.term.options.theme = t.xterm));
-  localStorage.setItem("themeName", JSON.stringify(t.name));
   document
     .querySelectorAll(".card")
     .forEach((c, i) => c.classList.toggle("sel", i === themeIdx));
 }
 
+// The terminals' own background is always transparent, so changing opacity only touches the page background
+function applyOpacity() {
+  const t = THEMES[themeIdx];
+  const r = document.documentElement.style;
+  const a = window.term.opaque ? 1 : opacity / 100;
+  r.setProperty("--bga", rgba(t.ui.bg, a));
+  r.setProperty("--bg2a", rgba(t.ui.bg2, a));
+}
+
+// The 30+ theme cards are only built the first time Settings is opened
+let gridBuilt = false;
 function buildThemeGrid() {
+  if (gridBuilt) return;
+  gridBuilt = true;
   const grid = $("theme-grid");
   THEMES.forEach((t, i) => {
     const [k, r, g, y, b, m] = t.ansi;
     const card = document.createElement("div");
-    card.className = "card";
+    card.className = "card" + (i === themeIdx ? " sel" : "");
     card.innerHTML = `
       <div class="preview" style="background:${t.ui.bg};color:${t.ui.fg}">
         <div><span class="pl" style="background:${b};color:${t.ui.bg}">user</span><span class="pl" style="background:${m};color:${t.ui.bg}">~/dev</span><span class="pl" style="background:${g};color:${t.ui.bg}">main</span></div>
@@ -720,6 +756,7 @@ function buildThemeGrid() {
     card.onclick = () => {
       themeIdx = i;
       applyTheme();
+      save("themeName", t.name);
     };
     grid.appendChild(card);
   });
@@ -740,10 +777,11 @@ async function newTab() {
     cursorStyle: "bar",
     allowProposedApi: true,
     scrollback: 10000,
-    overviewRuler: { width: 6 },
     theme: THEMES[themeIdx].xterm,
     // ConPTY reflows the screen itself on resize; without this xterm reflows too and the two fight, losing/misplacing text
-    windowsPty: { backend: "conpty", buildNumber: window.term.winBuild },
+    ...(IS_WIN && {
+      windowsPty: { backend: "conpty", buildNumber: window.term.winBuild },
+    }),
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -753,16 +791,17 @@ async function newTab() {
   fit.fit();
   pane.classList.remove("active");
 
-  const id = await window.term.create(term.cols, term.rows);
+  // the tab appears straight away; its shell id (tab.id) arrives once the main process has spawned the shell
   const el = document.createElement("div");
   el.className = "tab";
   el.draggable = true;
-  el.innerHTML = `<span class="label">PowerShell ${++tabCount}</span><span class="x">×</span>`;
-  const tab = { id, el, pane, term, fit };
+  el.innerHTML = `<span class="label"></span><span class="x">×</span>`;
+  el.querySelector(".label").textContent = `${window.term.shellLabel} ${++tabCount}`;
+  const tab = { id: null, el, pane, term, fit, gl: null, used: 0, parsed: 0, closed: false };
   tabs.push(tab);
   tabsEl.appendChild(el);
 
-  term.onData((d) => window.term.write(id, d));
+  term.onData((d) => window.term.write(tab.id, d));
   // right-click / menu pastes arrive as native paste events; route them through pasteText too
   pane.addEventListener(
     "paste",
@@ -770,20 +809,20 @@ async function newTab() {
       e.preventDefault();
       e.stopPropagation();
       const t = e.clipboardData.getData("text");
-      if (t) pasteText(id, t);
+      if (t) pasteText(tab, t);
     },
     true,
   );
-  enableClickToMove(term, pane, id);
+  enableClickToMove(term, pane, tab);
   // ConPTY redraws its whole viewport on every resize, so only the settled size is sent to it.
   let resizeTimer = null,
     sent = { cols: term.cols, rows: term.rows };
   term.onResize(({ cols, rows }) => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
-      if (cols === sent.cols && rows === sent.rows) return;
+      if (tab.id == null || (cols === sent.cols && rows === sent.rows)) return;
       sent = { cols, rows };
-      window.term.resize(id, cols, rows);
+      window.term.resize(tab.id, cols, rows);
     }, 120);
   });
   // Child processes (npm -> cmd.exe, etc.) title the console with their exe path; keep the folder name the prompt set instead
@@ -806,13 +845,13 @@ async function newTab() {
     }
     if (e.ctrlKey && !e.altKey && e.code === "KeyV") {
       e.preventDefault(); // otherwise the textarea's native paste fires too and the text lands twice
-      navigator.clipboard.readText().then((t) => t && pasteText(id, t));
+      navigator.clipboard.readText().then((t) => t && pasteText(tab, t));
       return false;
     }
-    // ESC+CR (Alt+Enter) is bound to AddLine in prompt.ps1
+    // ESC+CR (Alt+Enter) is bound to a "new line" action in the prompt scripts (src/shell)
     if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "Enter") {
       e.preventDefault(); // suppresses the keypress event, which xterm would otherwise turn into a plain Enter
-      window.term.write(id, "\x1b\r");
+      window.term.write(tab.id, "\x1b\r");
       return false;
     }
     return true;
@@ -830,10 +869,20 @@ async function newTab() {
   el.addEventListener("click", () => select(tab));
   el.querySelector(".x").addEventListener("click", (e) => {
     e.stopPropagation();
-    window.term.kill(id);
     closeTab(tab);
   });
   select(tab);
+
+  const { cols, rows } = term;
+  const id = await window.term.create(cols, rows);
+  if (tab.closed) return window.term.kill(id); // closed before the shell was ready
+  tab.id = id;
+  sent = { cols, rows };
+  // the tab was resized while the shell was starting
+  if (term.cols !== cols || term.rows !== rows) {
+    sent = { cols: term.cols, rows: term.rows };
+    window.term.resize(id, term.cols, term.rows);
+  }
 }
 
 // Dragging a tab left/right reorders it live: it moves before the first tab whose midpoint is right of the pointer.
@@ -856,16 +905,22 @@ tabsEl.addEventListener("dragover", (e) => {
 });
 tabsEl.addEventListener("drop", (e) => e.preventDefault());
 
-// A raw newline would run the pasted line immediately; Alt+Enter (AddLine in prompt.ps1) just starts a new line.
-function pasteText(id, text) {
-  window.term.write(
-    id,
-    text.replace(/(\r\n|\r|\n)+$/, "").replace(/\r\n|\r|\n/g, "\x1b\r"),
-  );
+// A raw newline would run the pasted line immediately.
+function pasteText(tab, text) {
+  if (IS_WIN) {
+    // Alt+Enter (AddLine in src/shell/prompt.ps1) just starts a new line
+    window.term.write(
+      tab.id,
+      text.replace(/(\r\n|\r|\n)+$/, "").replace(/\r\n|\r|\n/g, "\x1b\r"),
+    );
+  } else {
+    // bash, zsh and fish turn on bracketed paste, which xterm uses here so pasted newlines don't run anything
+    tab.term.paste(text);
+  }
 }
 
 // Clicking inside the line being typed moves the cursor there by sending the right number of arrow keys.
-function enableClickToMove(term, pane, id) {
+function enableClickToMove(term, pane, tab) {
   let down = null;
   pane.addEventListener("mousedown", (e) => {
     down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
@@ -900,10 +955,33 @@ function enableClickToMove(term, pane, id) {
       row * term.cols + col - (buf.cursorY * term.cols + buf.cursorX);
     if (delta)
       window.term.write(
-        id,
+        tab.id,
         (delta > 0 ? "\x1b[C" : "\x1b[D").repeat(Math.abs(delta)),
       );
   });
+}
+
+// GPU (WebGL) rendering is far faster than xterm's DOM fallback. Browsers allow only ~16 WebGL contexts and each holds GPU
+// memory, so just the most recently used tabs keep one; if WebGL is unavailable the tab stays on the DOM renderer.
+const GL_MAX = 6;
+let useSeq = 0;
+function attachGl(tab) {
+  if (tab.gl || typeof WebglAddon === "undefined") return;
+  try {
+    const gl = new WebglAddon.WebglAddon();
+    gl.onContextLoss(() => detachGl(tab));
+    tab.term.loadAddon(gl);
+    tab.gl = gl;
+  } catch (err) {
+    console.warn("WebGL renderer unavailable, using the DOM renderer:", err);
+  }
+}
+function detachGl(tab) {
+  const gl = tab.gl;
+  tab.gl = null;
+  try {
+    gl?.dispose();
+  } catch {}
 }
 
 function select(tab) {
@@ -913,12 +991,21 @@ function select(tab) {
     t.pane.classList.toggle("active", t === tab);
   });
   tab.fit.fit();
+  tab.used = ++useSeq;
+  attachGl(tab);
+  tabs
+    .filter((t) => t.gl)
+    .sort((a, b) => b.used - a.used)
+    .slice(GL_MAX)
+    .forEach(detachGl);
   tab.term.focus();
 }
 
 function closeTab(tab) {
   const i = tabs.indexOf(tab);
   if (i < 0) return;
+  tab.closed = true;
+  if (tab.id != null) window.term.kill(tab.id);
   tabs.splice(i, 1);
   tab.el.remove();
   tab.pane.remove();
@@ -927,49 +1014,67 @@ function closeTab(tab) {
   if (active === tab) select(tabs[Math.max(0, i - 1)]);
 }
 
-window.term.onData((id, d) => tabs.find((t) => t.id === id)?.term.write(d));
+// Tell the main process how much xterm has actually parsed, so it can pause a pty that is producing output faster than that
+const ACK_EVERY = 64 * 1024;
+window.term.onData((id, d) => {
+  const t = tabs.find((t) => t.id === id);
+  if (!t) return;
+  t.term.write(d, () => {
+    t.parsed += d.length;
+    if (t.parsed >= ACK_EVERY) {
+      window.term.ack(id, t.parsed);
+      t.parsed = 0;
+    }
+  });
+});
 window.term.onExit((id) => {
   const t = tabs.find((t) => t.id === id);
   if (t) closeTab(t);
 });
-let fitFrame = 0;
+// Refit at most every ~50 ms while the window is being dragged: each new size reflows the whole scrollback
+let fitTimer = 0,
+  lastFit = 0;
+const doFit = () => {
+  fitTimer = 0;
+  lastFit = performance.now();
+  if (!active) return;
+  const dims = active.fit.proposeDimensions();
+  if (
+    dims &&
+    Number.isFinite(dims.cols) &&
+    (dims.cols !== active.term.cols || dims.rows !== active.term.rows)
+  )
+    active.fit.fit();
+};
 const refit = () => {
-  cancelAnimationFrame(fitFrame);
-  fitFrame = requestAnimationFrame(() => {
-    if (!active) return;
-    const dims = active.fit.proposeDimensions();
-    if (
-      dims &&
-      Number.isFinite(dims.cols) &&
-      (dims.cols !== active.term.cols || dims.rows !== active.term.rows)
-    )
-      active.fit.fit();
-  });
+  if (fitTimer) return;
+  const wait = 50 - (performance.now() - lastFit);
+  fitTimer = wait > 0 ? setTimeout(doFit, wait) : requestAnimationFrame(doFit);
 };
 new ResizeObserver(refit).observe(termsEl);
 window.addEventListener("resize", refit);
 
-function setFont(n) {
+function setFont(n, remote) {
   fontSize = Math.min(28, Math.max(9, n));
-  localStorage.setItem("fontSize", fontSize);
+  if (!remote) save("fontSize", fontSize);
   tabs.forEach((t) => {
     t.term.options.fontSize = fontSize;
     t.fit.fit();
   });
 }
 
-function setLineHeight(n) {
+function setLineHeight(n, remote) {
   lineHeight = Math.min(2, Math.max(1, Math.round(n * 100) / 100));
-  localStorage.setItem("lineHeight", lineHeight);
+  if (!remote) save("lineHeight", lineHeight);
   tabs.forEach((t) => {
     t.term.options.lineHeight = lineHeight;
     t.fit.fit();
   });
 }
 
-function setFontFamily(i) {
+function setFontFamily(i, remote) {
   fontIdx = i;
-  localStorage.setItem("fontName", JSON.stringify(FONTS[i][0]));
+  if (!remote) save("fontName", FONTS[i][0]);
   tabs.forEach((t) => {
     t.term.options.fontFamily = fontStack();
     t.fit.fit();
@@ -1023,7 +1128,7 @@ function renderQuick() {
 }
 
 function saveQuick() {
-  localStorage.setItem("quick", JSON.stringify(quick));
+  save("quick", [...quick]);
   renderQuick();
 }
 
@@ -1067,7 +1172,10 @@ const closeSettings = () => {
   settings.classList.add("hidden");
   active?.term.focus();
 };
-$("settings-btn").onclick = () => settings.classList.remove("hidden");
+$("settings-btn").onclick = () => {
+  buildThemeGrid();
+  settings.classList.remove("hidden");
+};
 $("settings-close").onclick = closeSettings;
 settings.addEventListener("mousedown", (e) => {
   if (e.target === settings) closeSettings();
@@ -1080,8 +1188,8 @@ $("opacity-val").textContent = opacity + "%";
 opSlider.oninput = () => {
   opacity = Number(opSlider.value);
   $("opacity-val").textContent = opacity + "%";
-  localStorage.setItem("opacity", opacity);
-  applyTheme();
+  save("opacity", opacity);
+  applyOpacity();
 };
 document.querySelectorAll(".rs").forEach((h) => {
   h.addEventListener("pointerdown", (e) => {
@@ -1110,10 +1218,7 @@ window.addEventListener("keydown", (e) => {
     newTab();
   } else if (e.code === "KeyW") {
     e.preventDefault();
-    if (active) {
-      window.term.kill(active.id);
-      closeTab(active);
-    }
+    if (active) closeTab(active);
   } else if (e.code === "Equal") setFont(fontSize + 1);
   else if (e.code === "Minus") setFont(fontSize - 1);
   else if (e.code === "Digit0") setFont(14);
@@ -1124,8 +1229,38 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// A change made in another window of the app arrives here, so every window stays in step
+window.term.onSetting((k, v) => {
+  S[k] = v;
+  if (k === "themeName") {
+    const i = THEMES.findIndex((t) => t.name === v);
+    if (i >= 0) {
+      themeIdx = i;
+      applyTheme();
+    }
+  } else if (k === "opacity") {
+    opacity = v;
+    opSlider.value = v;
+    $("opacity-val").textContent = v + "%";
+    applyOpacity();
+  } else if (k === "fontSize") setFont(v, true);
+  else if (k === "lineHeight") {
+    setLineHeight(v, true);
+    lhSlider.value = lineHeight;
+    $("line-height-val").textContent = lineHeight.toFixed(2);
+  } else if (k === "fontName") {
+    const i = FONTS.findIndex((f) => f[0] === v);
+    if (i >= 0) {
+      setFontFamily(i, true);
+      fontSel.value = i;
+    }
+  } else if (k === "quick" && Array.isArray(v)) {
+    quick = [...v];
+    renderQuick();
+  }
+});
+
 (async () => {
-  buildThemeGrid();
   renderQuick();
   applyTheme();
   // the bundled Nerd Font must be ready before xterm measures its cells

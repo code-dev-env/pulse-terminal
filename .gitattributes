@@ -1,0 +1,4 @@
+# Shell scripts run on Linux and must keep LF line endings, whatever the checkout's autocrlf setting
+*.sh   text eol=lf
+*.bash text eol=lf
+*.zsh  text eol=lf

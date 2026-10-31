@@ -52,12 +52,13 @@ if ($PSVersionTable.PSVersion.Major -lt 6) { try {
   $script:rl = [Microsoft.PowerShell.PSConsoleReadLine]
   $script:fY = $script:rl.GetField('_initialY', $script:flags)
   $script:fCur = $script:rl.GetField('_current', $script:flags)
+  $script:fSingleton = $script:rl.GetField('_singleton', 'NonPublic,Static')
   $script:toPoint = $script:rl.GetMethod('ConvertOffsetToPoint', $script:flags)
   $script:size = ''
   $script:changed = [Diagnostics.Stopwatch]::StartNew()
   if ($script:fY -and $script:fCur -and $script:toPoint) {
     function global:Sync-ReadLine {
-      $s = $script:rl.GetField('_singleton', 'NonPublic,Static').GetValue($null)
+      $s = $script:fSingleton.GetValue($null)
       $size = "$([Console]::WindowWidth)x$([Console]::WindowHeight)"
       if ($size -ne $script:size) { $script:size = $size; $script:changed.Restart() }
       if ($script:changed.ElapsedMilliseconds -gt 2500) { return }
@@ -70,23 +71,46 @@ if ($PSVersionTable.PSVersion.Major -lt 6) { try {
   }
 } catch {} }
 
+# Starting git costs a process spawn on every prompt, so skip it outside a repo (a .git folder, or file for worktrees, up the tree)
+function script:Test-GitRepo([string]$dir) {
+  try {
+    while ($dir) {
+      $g = [IO.Path]::Combine($dir, '.git')
+      if ([IO.Directory]::Exists($g) -or [IO.File]::Exists($g)) { return $true }
+      $dir = [IO.Path]::GetDirectoryName($dir)
+    }
+  } catch {}
+  return $false
+}
+
 function global:prompt {
   $ok = $?
   $cwd = (Get-Location).Path
   $p = $cwd
   if ($p.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) { $p = '~' + $p.Substring($HOME.Length) }
-  $parts = @($p -split '[\\/]' | Where-Object { $_ })
+  $parts = $p.Split([char[]]'\/', [StringSplitOptions]::RemoveEmptyEntries)
   if ($parts.Count -gt 3) { $p = $script:ellipsis + '/' + ($parts[-3..-1] -join '/') }
-  $leaf = Split-Path -Leaf $cwd
+  $leaf = [IO.Path]::GetFileName($cwd)
   if (-not $leaf) { $leaf = $cwd }
   $host.UI.RawUI.WindowTitle = $leaf
 
-  $line = "$e[0m$e[30;44m $script:iUser $env:USERNAME $e[34;45m$script:sep$e[30;45m $script:iDir $p "
+  $line = "$e[0m$e[30;44m $script:iUser $([Environment]::UserName) $e[34;45m$script:sep$e[30;45m $script:iDir $p "
   $last = 5
+  # branch and dirty state come from a single git call
   $branch = $null
-  try { $branch = git rev-parse --abbrev-ref HEAD 2>$null } catch {}
+  $dirty = $false
+  if (Test-GitRepo $cwd) {
+    try {
+      $st = git --no-optional-locks status --porcelain=v2 --branch 2>$null
+      if ($LASTEXITCODE -eq 0) {
+        foreach ($l in $st) {
+          if ($l.StartsWith('# branch.head ')) { $branch = $l.Substring(14); if ($branch -eq '(detached)') { $branch = 'HEAD' } }
+          elseif (-not $l.StartsWith('#')) { $dirty = $true; break }
+        }
+      }
+    } catch {}
+  }
   if ($branch) {
-    $dirty = git status --porcelain 2>$null
     $c = if ($dirty) { 3 } else { 2 }
     $line += "$e[3${last};4${c}m$script:sep$e[30;4${c}m $script:iBranch $branch"
     if ($dirty) { $line += ' *' }

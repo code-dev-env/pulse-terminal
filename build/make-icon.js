@@ -1,4 +1,5 @@
 // Run with: npx electron build/make-icon.js  -> writes build/icon.ico and src/icon.png
+//           npx electron build/make-icon.js --linux  -> writes only build/icons/512x512.png (used by the Linux packages)
 const { app, BrowserWindow, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -14,6 +15,18 @@ const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" vi
 </svg>`;
 
 app.whenReady().then(async () => {
+  if (process.argv.includes('--linux')) {
+    // same artwork rendered at 512x512 (the SVG scales without loss)
+    const big = new BrowserWindow({ width: 512, height: 512, show: false, transparent: true, frame: false, useContentSize: true,
+      webPreferences: { offscreen: true } });
+    await big.loadURL('data:text/html,' + encodeURIComponent(`<body style="margin:0;background:transparent"><div style="width:512px;height:512px">${SVG.replace('width="256" height="256"', 'width="512" height="512"')}</div></body>`));
+    await new Promise((r) => setTimeout(r, 400));
+    const shot = await big.webContents.capturePage({ x: 0, y: 0, width: 512, height: 512 });
+    fs.mkdirSync(path.join(__dirname, 'icons'), { recursive: true });
+    fs.writeFileSync(path.join(__dirname, 'icons', '512x512.png'), shot.toPNG());
+    console.log('linux icon written');
+    return app.quit();
+  }
   const win = new BrowserWindow({ width: 256, height: 256, show: false, transparent: true, frame: false, useContentSize: true,
     webPreferences: { offscreen: true } });
   await win.loadURL('data:text/html,' + encodeURIComponent(`<body style="margin:0;background:transparent">${SVG}</body>`));

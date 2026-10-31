@@ -3,85 +3,115 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs");
 const pty = require("node-pty");
+const platform = require("./platform");
+const { enableNativeWindow, isOpaque } = require("./platform/window");
+const shells = require("./platform/shell");
 
-let win;
-
-// The portable exe unpacks the app to one fixed folder in %TEMP% and its launcher deletes that folder when its process exits,
-// so a second portable instance closing would pull the files out from under the first. Keep it single-instance there, and make
-// the extra process wait (hidden) until the first one quits instead of exiting right away.
-// The installed build runs from a permanent folder, so it has no lock and every launch opens its own window.
+// One process owns every window. Launching the app again (installed, portable or AppImage) asks that process for a new
+// window, so all windows share the same settings and no second Electron instance has to boot.
+// The Windows portable exe unpacks the app to one fixed folder in %TEMP% and its launcher deletes that folder when its
+// process exits, so the extra portable process can't just quit: it stays hidden until the first one is gone.
 const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR;
-const secondPortable = isPortable && !app.requestSingleInstanceLock();
-if (secondPortable) {
+const gotLock = app.requestSingleInstanceLock();
+const pidFile = path.join(app.getPath("userData"), "instance.pid");
+if (gotLock) {
+  app.on("second-instance", () => app.whenReady().then(createWindow));
+  try {
+    fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+    fs.writeFileSync(pidFile, String(process.pid));
+  } catch {}
+} else if (isPortable) {
+  const alive = (pid) => {
+    if (!pid) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return err.code === "EPERM";
+    }
+  };
+  let misses = 0;
   const wait = setInterval(() => {
-    if (app.requestSingleInstanceLock()) {
+    let pid = 0;
+    try {
+      pid = Number(fs.readFileSync(pidFile, "utf8"));
+    } catch {}
+    misses = alive(pid) ? 0 : misses + 1;
+    if (misses >= 3) {
       clearInterval(wait);
       app.quit();
     }
   }, 500);
-} else if (isPortable) {
-  app.on("second-instance", () => {
-    if (!win || win.isDestroyed()) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  });
+} else {
+  app.quit();
 }
 
-// A transparent Electron window has no native resize frame, so Windows won't offer Snap Layouts or edge snapping.
-// Adding WS_THICKFRAME / WS_MAXIMIZEBOX / WS_MINIMIZEBOX to it restores those.
-function enableNativeSnap(w) {
+/* ---------- settings: one JSON file in the user's app-data folder, shared by every window and every launch ---------- */
+const SETTING_KEYS = new Set([
+  "themeName",
+  "opacity",
+  "fontSize",
+  "lineHeight",
+  "fontName",
+  "quick",
+  "_migrated",
+]);
+const settingsFile = path.join(app.getPath("userData"), "settings.json");
+let settings = {};
+const dirtyKeys = new Set();
+let settingsTimer = null;
+
+function readSettingsFile() {
   try {
-    const koffi = require("koffi");
-    const user32 = koffi.load("user32.dll");
-    const GetStyle = user32.func(
-      "intptr_t __stdcall GetWindowLongPtrW(void* hWnd, int nIndex)",
-    );
-    const SetStyle = user32.func(
-      "intptr_t __stdcall SetWindowLongPtrW(void* hWnd, int nIndex, intptr_t value)",
-    );
-    const SetPos = user32.func(
-      "bool __stdcall SetWindowPos(void* hWnd, void* after, int x, int y, int cx, int cy, uint flags)",
-    );
-    const buf = w.getNativeWindowHandle();
-    const hwnd = koffi.decode(buf, "void *");
-    const GWL_STYLE = -16;
-    const style = Number(GetStyle(hwnd, GWL_STYLE));
-    SetStyle(hwnd, GWL_STYLE, style | 0x00040000 | 0x00010000 | 0x00020000);
-    SetPos(hwnd, null, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020);
-    // WS_THICKFRAME makes DWM draw its own square border/backdrop behind the page; round it and drop the border
-    try {
-      const SetAttr = koffi
-        .load("dwmapi.dll")
-        .func(
-          "int __stdcall DwmSetWindowAttribute(void* hWnd, uint attr, int *val, uint size)",
-        );
-      SetAttr(hwnd, 33, [2], 4); // DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND
-      SetAttr(hwnd, 34, [0xfffffffe], 4); // DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE
-    } catch (err) {
-      console.error("DWM corner attributes unavailable:", err.message);
-    }
-    return true;
-  } catch (err) {
-    console.error("native snap unavailable:", err.message);
-    return false;
+    const o = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+    return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
   }
 }
-const ptys = new Map();
-let nextId = 1;
 
-// Oh-My-Posh style powerline prompt (src/prompt.ps1). It uses the terminal's ANSI palette, so it follows the theme.
-function promptScript() {
-  const out = path.join(
-    os.tmpdir(),
-    `pulse-terminal-prompt-${process.pid}.ps1`,
-  );
-  fs.writeFileSync(
-    out,
-    fs.readFileSync(path.join(__dirname, "prompt.ps1"), "utf8"),
-    "utf8",
-  );
-  return out;
+function flushSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = null;
+  if (!dirtyKeys.size) return;
+  // merge into what is on disk so a change made by another process isn't overwritten with stale values
+  const disk = readSettingsFile();
+  for (const k of dirtyKeys) disk[k] = settings[k];
+  dirtyKeys.clear();
+  try {
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    const tmp = settingsFile + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(disk, null, 2), "utf8");
+    fs.renameSync(tmp, settingsFile);
+  } catch (err) {
+    console.error("settings not saved:", err.message);
+  }
 }
+
+// The renderer reads the current settings synchronously while its page loads
+ipcMain.on("settings:get", (e) => {
+  e.returnValue = settings;
+});
+ipcMain.on("settings:set", (e, key, value) => {
+  if (!SETTING_KEYS.has(key)) return;
+  settings[key] = value;
+  dirtyKeys.add(key);
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(flushSettings, 400);
+  for (const w of BrowserWindow.getAllWindows())
+    if (!w.isDestroyed() && w.webContents !== e.sender)
+      w.webContents.send("settings:changed", key, value);
+});
+ipcMain.on("shell:label", (e) => {
+  e.returnValue = shells.label();
+});
+
+/* ---------- per-window state ---------- */
+const winState = new WeakMap(); // BrowserWindow -> { maxed, restoreBounds, nativeSnap, resizeTimer }
+const winOf = (e) => BrowserWindow.fromWebContents(e.sender);
+
+const ptys = new Map(); // id -> { p, win, cols, rows, queue, size, timer, unacked, paused }
+let nextId = 1;
 
 /* ---------- startup banner: mascot + system snapshot ---------- */
 const cpuTimes = () =>
@@ -95,21 +125,17 @@ const cpuTimes = () =>
     { idle: 0, total: 0 },
   );
 
-async function cpuUsage() {
-  const a = cpuTimes();
-  await new Promise((r) => setTimeout(r, 150));
-  const b = cpuTimes();
-  const total = b.total - a.total;
-  return total ? Math.round((1 - (b.idle - a.idle) / total) * 100) : 0;
-}
-
-// Synchronous variant for redraws: average CPU load since the previous sample
-let lastCpu = cpuTimes();
+// Average CPU load since the previous sample. Reading it never waits, so opening a tab isn't delayed by a measurement.
+const coreCount = os.cpus().length;
+let lastCpu = cpuTimes(),
+  lastUsage = 0;
 function cpuUsageSince() {
   const a = lastCpu,
-    b = (lastCpu = cpuTimes());
+    b = cpuTimes();
   const total = b.total - a.total;
-  return total ? Math.round((1 - (b.idle - a.idle) / total) * 100) : 0;
+  if (total < 200 * coreCount) return lastUsage; // under ~200 ms of data is too noisy to show
+  lastCpu = b;
+  return (lastUsage = Math.round((1 - (b.idle - a.idle) / total) * 100));
 }
 
 const BANNER_MARK = "\x1b]777;ct-banner\x07";
@@ -154,9 +180,7 @@ function buildBanner(cpu) {
 
   let disk = "";
   try {
-    const s = fs.statfsSync(
-      process.env.SystemDrive ? process.env.SystemDrive + "\\" : "C:\\",
-    );
+    const s = fs.statfsSync(platform.diskRoot());
     const t = s.blocks * s.bsize,
       f = s.bavail * s.bsize;
     const pct = Math.round(((t - f) / t) * 100);
@@ -167,7 +191,7 @@ function buildBanner(cpu) {
     `${B}${OR}Pulse Terminal${R} ${DIM}v${app.getVersion()}${R}`,
     DIM + "─".repeat(40) + R,
     `${L}User${R}    ${os.userInfo().username}@${os.hostname()}`,
-    `${L}OS${R}      ${os.version()} (${os.release()})`,
+    `${L}OS${R}      ${platform.osLabel()}`,
     `${L}CPU${R}     ${model}`,
     `${L}Usage${R}   ${bar(cpu)} ${cpu}%`,
     `${L}Memory${R}  ${bar(memPct)} ${gb(used)}/${gb(total)} GB`,
@@ -186,30 +210,51 @@ function buildBanner(cpu) {
 }
 
 function createWindow() {
-  win = new BrowserWindow({
+  const opaque = isOpaque();
+  const opts = {
     width: 1100,
     height: 700,
     minWidth: 520,
     minHeight: 320,
     frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
+    transparent: !opaque,
+    backgroundColor: opaque ? "#1e1e1e" : "#00000000",
     icon: path.join(__dirname, "icon.png"),
     title: "Pulse Terminal",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
+      spellcheck: false,
+      additionalArguments: opaque ? ["--ct-opaque"] : [],
     },
-  });
+  };
+  // cascade a new window down and right of the one in front, so windows don't stack exactly on top of each other
+  const ref = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+  if (ref && !ref.isMaximized()) {
+    const b = ref.getBounds();
+    const wa = screen.getDisplayMatching(b).workArea;
+    const x = b.x + 32,
+      y = b.y + 32;
+    if (
+      x + opts.width <= wa.x + wa.width &&
+      y + opts.height <= wa.y + wa.height
+    ) {
+      opts.x = x;
+      opts.y = y;
+    }
+  }
+  const win = new BrowserWindow(opts);
+  const st = { maxed: false, restoreBounds: null, nativeSnap: false, resizeTimer: null };
+  winState.set(win, st);
   win.setMenuBarVisibility(false);
   if (process.env.CT_DEBUG)
     win.webContents.on("console-message", (e) =>
       console.log("[renderer]", e.message ?? e),
     );
   win.loadFile(path.join(__dirname, "index.html"));
-  nativeSnap = enableNativeSnap(win);
-  if (nativeSnap) {
-    // Windows now owns maximize / resize / snapping; just mirror the state to the UI
+  st.nativeSnap = enableNativeWindow(win);
+  if (st.nativeSnap) {
+    // The OS now owns maximize / resize / snapping; just mirror the state to the UI
     const native = () =>
       !win.isDestroyed() &&
       win.webContents.send("win:maxstate", win.isMaximized(), true);
@@ -217,145 +262,211 @@ function createWindow() {
     win.on("unmaximize", native);
     win.webContents.on("did-finish-load", native);
   } else {
-    watchDragSnap();
+    watchDragSnap(win, st);
+  }
+  win.on("closed", () => {
+    clearInterval(st.resizeTimer);
+    for (const [id, r] of ptys) if (r.win === win) killPty(id);
+  });
+  if (process.env.CT_DEBUG) console.log("[main] window opened");
+  return win;
+}
+
+/* ---------- pty output: batched, with backpressure ---------- */
+// Output is coalesced into at most one IPC message per BATCH_MS (the first chunk after a quiet spell goes out at once, so
+// typing echo isn't delayed). The renderer acknowledges what xterm has parsed; if too much is unacknowledged the pty is
+// paused, so a runaway command can't flood xterm's buffer and Ctrl+C stays responsive.
+const BATCH_MS = 8,
+  BATCH_MAX = 64 * 1024;
+const FLOW_HIGH = 512 * 1024,
+  FLOW_LOW = 128 * 1024;
+
+function pump(id, r) {
+  r.timer = null;
+  if (!r.queue.length) return;
+  const data = r.queue.length === 1 ? r.queue[0] : r.queue.join("");
+  r.queue = [];
+  r.size = 0;
+  if (!r.win.isDestroyed()) r.win.webContents.send("pty:data", id, data);
+  r.timer = setTimeout(() => pump(id, r), BATCH_MS);
+}
+
+function queueData(id, r, d) {
+  r.queue.push(d);
+  r.size += d.length;
+  r.unacked += d.length;
+  if (!r.paused && r.unacked > FLOW_HIGH) {
+    r.paused = true;
+    r.p.pause();
+  }
+  if (!r.timer) pump(id, r);
+  else if (r.size >= BATCH_MAX) {
+    clearTimeout(r.timer);
+    pump(id, r);
   }
 }
 
-// PowerShell 7+ (pwsh) if installed, else null so the caller falls back to the inbox Windows PowerShell 5.1
-function findPwsh() {
-  const dirs = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
-  // PATH can be incomplete when the packaged exe is launched from Explorer/a shortcut, so also try the known install spots
-  dirs.push(
-    path.join(
-      process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
-      "Microsoft",
-      "WindowsApps",
-    ),
-    path.join(
-      process.env.ProgramFiles || "C:\\Program Files",
-      "PowerShell",
-      "7",
-    ),
-  );
-  for (const d of dirs) {
-    const f = path.join(d, "pwsh.exe");
-    // The Store/winget install is an app-execution alias (reparse point): existsSync/statSync fail on it with EACCES, lstat doesn't
+function killPty(id) {
+  const r = ptys.get(id);
+  if (!r) return;
+  ptys.delete(id);
+  clearTimeout(r.timer);
+  try {
+    r.p.kill();
+  } catch {}
+}
+
+/* ---------- starting a shell ---------- */
+function spawnPty(spec, cols, rows, banner) {
+  const opts = {
+    name: "xterm-256color",
+    cols,
+    rows,
+    cwd: os.homedir(),
+    env: shells.env(spec, banner),
+  };
+  if (platform.isWin) {
+    opts.useConpty = true;
+    // The bundled conpty.dll never repaints on resize, so xterm's reflow and ConPTY's drift apart and PSReadLine then draws at a stale row.
+    // The inbox ConPTY repaints its whole viewport on every resize, which keeps xterm in sync.
+    opts.useConptyDll = false;
+  }
+  return pty.spawn(spec.file, spec.args, opts);
+}
+
+// A shell that dies this soon after starting, with an error, almost certainly has a broken startup file or script
+const EARLY_EXIT_MS = 3000;
+
+// Starts the first working shell from specs[from..]; later entries are fallbacks
+function startShell(id, r, specs, from, banner) {
+  let p = null,
+    idx = from;
+  for (; idx < specs.length; idx++) {
     try {
-      fs.lstatSync(f);
-      return f;
-    } catch {}
+      p = spawnPty(specs[idx], r.cols, r.rows, banner);
+      break;
+    } catch (err) {
+      console.error(`could not start ${specs[idx].file}:`, err.message);
+    }
   }
-  return null;
+  if (!p) throw new Error("no usable shell could be started");
+  const started = Date.now();
+  r.p = p;
+  p.onData((d) => {
+    const i = d.indexOf(BANNER_MARK);
+    if (i < 0) return queueData(id, r, d);
+    // `clear` was run: write a fresh banner file for the shell to print itself, so the terminal tracks the cursor below it
+    try {
+      fs.writeFileSync(banner, buildBanner(cpuUsageSince()), "utf8");
+    } catch {}
+    queueData(id, r, d.slice(0, i) + d.slice(i + BANNER_MARK.length));
+  });
+  p.onExit(({ exitCode }) => {
+    if (r.p !== p || ptys.get(id) !== r) return; // replaced, or already killed from this side
+    if (
+      !platform.isWin &&
+      exitCode !== 0 &&
+      Date.now() - started < EARLY_EXIT_MS &&
+      idx + 1 < specs.length
+    ) {
+      console.error(`${specs[idx].file} exited with ${exitCode} right after starting; trying the next shell`);
+      try {
+        fs.writeFileSync(banner, buildBanner(cpuUsageSince()), "utf8");
+        return startShell(id, r, specs, idx + 1, banner);
+      } catch (err) {
+        console.error(err.message);
+      }
+    }
+    ptys.delete(id);
+    clearTimeout(r.timer);
+    if (r.win.isDestroyed()) return;
+    if (r.queue.length) r.win.webContents.send("pty:data", id, r.queue.join(""));
+    r.win.webContents.send("pty:exit", id);
+  });
 }
 
-ipcMain.handle("pty:create", async (e, { cols, rows }) => {
+ipcMain.handle("pty:create", (e, { cols, rows }) => {
+  const win = winOf(e);
   const id = nextId++;
   const banner = path.join(
     os.tmpdir(),
     `pulse-terminal-banner-${id}-${process.pid}.txt`,
   );
-  fs.writeFileSync(banner, buildBanner(await cpuUsage()), "utf8");
-  const shellArgs = [
-    "-NoLogo",
-    "-NoExit",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
-    `. '${promptScript()}'`,
-  ];
-  const spawnShell = (exe) =>
-    pty.spawn(exe, shellArgs, {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd: fs.existsSync("D:\\Ajay") ? "D:\\Ajay" : os.homedir(),
-      env: { ...process.env, CT_BANNER: banner },
-      useConpty: true,
-      // The bundled conpty.dll never repaints on resize, so xterm's reflow and ConPTY's drift apart and PSReadLine then draws at a stale row.
-      // The inbox ConPTY repaints its whole viewport on every resize, which keeps xterm in sync.
-      useConptyDll: false,
-    });
-  let p;
+  fs.writeFileSync(banner, buildBanner(cpuUsageSince()), "utf8");
+  const r = { p: null, win, cols, rows, queue: [], size: 0, timer: null, unacked: 0, paused: false };
+  ptys.set(id, r);
   try {
-    p = spawnShell(findPwsh() || "powershell.exe");
-  } catch {
-    p = spawnShell("powershell.exe");
-  }
-  ptys.set(id, p);
-  p.onData((d) => {
-    if (win.isDestroyed()) return;
-    const i = d.indexOf(BANNER_MARK);
-    if (i < 0) return win.webContents.send("pty:data", id, d);
-    // `clear` was run: write a fresh banner file for the shell to print itself, so ConPTY tracks the cursor below it
-    try {
-      fs.writeFileSync(banner, buildBanner(cpuUsageSince()), "utf8");
-    } catch {}
-    win.webContents.send(
-      "pty:data",
-      id,
-      d.slice(0, i) + d.slice(i + BANNER_MARK.length),
-    );
-  });
-  p.onExit(() => {
+    startShell(id, r, shells.candidates(), 0, banner);
+  } catch (err) {
     ptys.delete(id);
-    if (!win.isDestroyed()) win.webContents.send("pty:exit", id);
-  });
+    throw err;
+  }
   return id;
 });
-ipcMain.on("pty:write", (e, id, d) => ptys.get(id)?.write(d));
+ipcMain.on("pty:write", (e, id, d) => ptys.get(id)?.p.write(d));
+ipcMain.on("pty:ack", (e, id, n) => {
+  const r = ptys.get(id);
+  if (!r) return;
+  r.unacked = Math.max(0, r.unacked - n);
+  if (r.paused && r.unacked < FLOW_LOW) {
+    r.paused = false;
+    r.p.resume();
+  }
+});
 ipcMain.on("pty:resize", (e, id, cols, rows) => {
+  const r = ptys.get(id);
+  if (!r) return;
+  r.cols = cols;
+  r.rows = rows;
   try {
-    ptys.get(id)?.resize(cols, rows);
+    r.p.resize(cols, rows);
   } catch {}
 });
-ipcMain.on("pty:kill", (e, id) => {
-  ptys.get(id)?.kill();
-  ptys.delete(id);
-});
-ipcMain.on("win:min", () => win.minimize());
+ipcMain.on("pty:kill", (e, id) => killPty(id));
+ipcMain.on("win:min", (e) => winOf(e)?.minimize());
 
-// Transparent windows can't be maximized or edge-resized by Windows, so both are done by hand.
-let maxed = false,
-  restoreBounds = null,
-  nativeSnap = false;
-const sendMax = () =>
-  !win.isDestroyed() && win.webContents.send("win:maxstate", maxed);
-function setMaximized(on) {
-  if (on === maxed) return;
+// Where the OS can't maximize or edge-resize the window (transparent windows on Windows), both are done by hand.
+const sendMax = (win, st) =>
+  !win.isDestroyed() && win.webContents.send("win:maxstate", st.maxed);
+function setMaximized(win, st, on) {
+  if (on === st.maxed) return;
   if (on) {
-    restoreBounds = win.getBounds();
-    win.setBounds(screen.getDisplayMatching(restoreBounds).workArea);
+    st.restoreBounds = win.getBounds();
+    win.setBounds(screen.getDisplayMatching(st.restoreBounds).workArea);
   } else {
-    win.setBounds(restoreBounds);
+    win.setBounds(st.restoreBounds);
   }
-  maxed = on;
-  sendMax();
+  st.maxed = on;
+  sendMax(win, st);
 }
-ipcMain.on("win:max", () => {
-  if (nativeSnap) return win.isMaximized() ? win.unmaximize() : win.maximize();
-  setMaximized(!maxed);
+ipcMain.on("win:max", (e) => {
+  const win = winOf(e),
+    st = win && winState.get(win);
+  if (!st) return;
+  if (st.nativeSnap) return win.isMaximized() ? win.unmaximize() : win.maximize();
+  setMaximized(win, st, !st.maxed);
 });
 
-// Windows' drag-to-top snap doesn't exist for transparent windows: maximize when a title-bar drag ends at the top edge.
+// The OS's drag-to-top snap doesn't exist for such windows: maximize when a title-bar drag ends at the top edge.
 // Dragging a maximized window away restores it.
-function watchDragSnap() {
+function watchDragSnap(win, st) {
   let ignore = false;
   win.on("moved", () => {
     if (ignore) return;
     const c = screen.getCursorScreenPoint();
     const area = screen.getDisplayNearestPoint(c).bounds;
-    if (!maxed && c.y <= area.y + 4) {
+    if (!st.maxed && c.y <= area.y + 4) {
       ignore = true;
-      setMaximized(true);
+      setMaximized(win, st, true);
       setTimeout(() => (ignore = false), 300);
-    } else if (maxed) {
+    } else if (st.maxed) {
       const wa = screen.getDisplayMatching(win.getBounds()).workArea;
       const b = win.getBounds();
       if (b.x !== wa.x || b.y !== wa.y) {
-        maxed = false;
-        sendMax();
-        if (restoreBounds)
-          win.setSize(restoreBounds.width, restoreBounds.height);
+        st.maxed = false;
+        sendMax(win, st);
+        if (st.restoreBounds)
+          win.setSize(st.restoreBounds.width, st.restoreBounds.height);
       }
     }
   });
@@ -363,12 +474,15 @@ function watchDragSnap() {
 
 const MIN_W = 520,
   MIN_H = 320;
-let resizeTimer = null;
 ipcMain.on("win:rs-start", (e, edge) => {
-  clearInterval(resizeTimer);
+  const win = winOf(e),
+    st = win && winState.get(win);
+  if (!st) return;
+  clearInterval(st.resizeTimer);
   const b = win.getBounds();
   const c0 = screen.getCursorScreenPoint();
-  resizeTimer = setInterval(() => {
+  st.resizeTimer = setInterval(() => {
+    if (win.isDestroyed()) return clearInterval(st.resizeTimer);
     const c = screen.getCursorScreenPoint();
     const dx = c.x - c0.x,
       dy = c.y - c0.y;
@@ -386,15 +500,33 @@ ipcMain.on("win:rs-start", (e, edge) => {
     win.setBounds({ x, y, width, height });
   }, 8);
 });
-ipcMain.on("win:rs-end", () => {
-  clearInterval(resizeTimer);
-  resizeTimer = null;
+ipcMain.on("win:rs-end", (e) => {
+  const st = winState.get(winOf(e));
+  if (!st) return;
+  clearInterval(st.resizeTimer);
+  st.resizeTimer = null;
 });
-ipcMain.on("win:close", () => win.close());
-ipcMain.handle("win:ismax", () => (nativeSnap ? win.isMaximized() : maxed));
+ipcMain.on("win:close", (e) => winOf(e)?.close());
+ipcMain.handle("win:ismax", (e) => {
+  const win = winOf(e),
+    st = win && winState.get(win);
+  return st ? (st.nativeSnap ? win.isMaximized() : st.maxed) : false;
+});
 
-if (!secondPortable) app.whenReady().then(createWindow);
+if (gotLock)
+  app.whenReady().then(() => {
+    settings = readSettingsFile();
+    createWindow();
+  });
 app.on("window-all-closed", () => {
-  ptys.forEach((p) => p.kill());
+  for (const id of [...ptys.keys()]) killPty(id);
   app.quit();
+});
+app.on("will-quit", () => {
+  flushSettings();
+  if (!gotLock) return;
+  shells.cleanup();
+  try {
+    fs.rmSync(pidFile, { force: true });
+  } catch {}
 });

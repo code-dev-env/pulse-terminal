@@ -421,6 +421,12 @@ body.maximized {
   border-radius: 0;
   border: 0;
 }
+/* Linux fallback without a compositor: a plain opaque window (see PULSE_OPAQUE in README) */
+body.opaque {
+  background: var(--bg);
+  border-radius: 0;
+  border: 0;
+}
 .rs {
   position: fixed;
   z-index: 100;
