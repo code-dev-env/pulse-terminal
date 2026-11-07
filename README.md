@@ -11,7 +11,11 @@ A fast, multi-tab, fully customizable terminal for Windows and Linux, built with
 - **Startup banner** with a mascot and a system snapshot (OS, CPU, memory, disk, uptime).
 - **Quick commands**: a customizable list of commands you can run with one click.
 - **Adjustable window opacity, font family, font size, and line height**, saved between sessions.
-- **Editing conveniences**: click inside the current input line to move the cursor, multi-line input with `Shift+Enter` / `Alt+Enter`, and multi-line paste that doesn't execute immediately.
+- **Editing conveniences**: click inside the current input line to move the cursor, multi-line input with `Shift+Enter` / `Alt+Enter`, and multi-line paste that doesn't execute immediately at the PowerShell prompt (and goes in as typed everywhere else: REPLs, ssh, other shells, bracketed paste where the program asks for it). Pasted control characters are stripped, and pastes over 50 KB ask first. Keystrokes typed while a tab is still starting are held and delivered once the prompt is up.
+- **Find in scrollback**: `Ctrl+Shift+F` (case, regex, next/previous). **Scrollback size** is a setting (1,000 to 100,000 lines).
+- **Other shells**: the arrow next to `+` opens a tab in Command Prompt, WSL or Git Bash when they are installed (Windows).
+- **Files and links**: drop files onto the window to type their (quoted) paths; web links, including OSC 8 hyperlinks, open in your browser. The window never navigates away from the terminal UI.
+- **Terminal capabilities**: Unicode 11 widths (emoji are two cells wide), truecolor, synchronized output (`ESC[?2026h`, no flicker in full-screen programs), sixel and iTerm2 inline images, window/cell size reports, `TERM_PROGRAM=PulseTerminal`, `COLORTERM=truecolor` and `COLORFGBG` for light/dark detection. OSC 10/11/4 colour queries are answered too, but Windows' ConPTY drops OSC replies on the way to the program, so that only takes effect on Linux.
 - **Native window behavior**: Windows Snap Layouts and edge snapping on the frameless and transparent window; on Linux the window manager handles maximize, resize and snapping.
 - **Multiple windows, one process**: launching the app again (portable, installed or AppImage) opens another window in the running instance. All windows share the same settings and changes show up in every open window.
 - **GPU rendering and flow control**: WebGL terminal rendering (with an automatic fallback to the DOM renderer), batched PTY output, and backpressure so heavy output stays smooth and Ctrl+C stays responsive.

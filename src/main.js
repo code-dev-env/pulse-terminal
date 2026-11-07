@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, shell } = require("electron");
 const path = require("path");
 const os = require("os");
 const fs = require("fs");
@@ -54,6 +54,7 @@ const SETTING_KEYS = new Set([
   "lineHeight",
   "fontName",
   "quick",
+  "scrollback",
   "_migrated",
 ]);
 const settingsFile = path.join(app.getPath("userData"), "settings.json");
@@ -102,9 +103,28 @@ ipcMain.on("settings:set", (e, key, value) => {
     if (!w.isDestroyed() && w.webContents !== e.sender)
       w.webContents.send("settings:changed", key, value);
 });
-ipcMain.on("shell:label", (e) => {
-  e.returnValue = shells.label();
+shells.profiles(); // find the installed shells now, while Electron is still starting up and this thread is idle
+// Read once, synchronously, while the page loads (the preload exposes it)
+ipcMain.on("app:info", (e) => {
+  e.returnValue = { version: app.getVersion(), label: shells.label(), profiles: shells.profiles() };
 });
+
+// Links clicked in the terminal open in the user's browser. Only web and mail links are passed on: the text comes from
+// whatever a program printed, so anything else (file:, ms-settings:, custom protocol handlers) must never be launched.
+const OPENABLE = new Set(["http:", "https:", "mailto:"]);
+function openExternalSafe(url) {
+  let u;
+  try {
+    u = new URL(String(url));
+  } catch {
+    return false;
+  }
+  if (!OPENABLE.has(u.protocol)) return false;
+  if (process.env.CT_TEST_NOOPEN) console.log("[open]", u.href); // lets the test harness observe without launching a browser
+  else shell.openExternal(u.href);
+  return true;
+}
+ipcMain.on("shell:open", (e, url) => openExternalSafe(url));
 
 /* ---------- per-window state ---------- */
 const winState = new WeakMap(); // BrowserWindow -> { maxed, restoreBounds, nativeSnap, resizeTimer }
@@ -247,6 +267,13 @@ function createWindow() {
   const st = { maxed: false, restoreBounds: null, nativeSnap: false, resizeTimer: null };
   winState.set(win, st);
   win.setMenuBarVisibility(false);
+  // The page is the terminal UI and nothing else: it never navigates (a dropped file would otherwise replace it) and
+  // never opens windows of its own (a link would otherwise open as an in-app window); links go to the browser instead.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalSafe(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (e) => e.preventDefault());
   if (process.env.CT_DEBUG)
     win.webContents.on("console-message", (e) =>
       console.log("[renderer]", e.message ?? e),
@@ -314,16 +341,17 @@ function killPty(id) {
   try {
     r.p.kill();
   } catch {}
+  fs.rm(r.banner, { force: true }, () => {}); // shells that never print the banner leave the file behind
 }
 
 /* ---------- starting a shell ---------- */
-function spawnPty(spec, cols, rows, banner) {
+function spawnPty(spec, cols, rows, banner, light) {
   const opts = {
     name: "xterm-256color",
     cols,
     rows,
     cwd: os.homedir(),
-    env: shells.env(spec, banner),
+    env: shells.env(spec, banner, light),
   };
   if (platform.isWin) {
     opts.useConpty = true;
@@ -343,7 +371,7 @@ function startShell(id, r, specs, from, banner) {
     idx = from;
   for (; idx < specs.length; idx++) {
     try {
-      p = spawnPty(specs[idx], r.cols, r.rows, banner);
+      p = spawnPty(specs[idx], r.cols, r.rows, banner, r.light);
       break;
     } catch (err) {
       console.error(`could not start ${specs[idx].file}:`, err.message);
@@ -379,13 +407,14 @@ function startShell(id, r, specs, from, banner) {
     }
     ptys.delete(id);
     clearTimeout(r.timer);
+    fs.rm(r.banner, { force: true }, () => {});
     if (r.win.isDestroyed()) return;
     if (r.queue.length) r.win.webContents.send("pty:data", id, r.queue.join(""));
     r.win.webContents.send("pty:exit", id);
   });
 }
 
-ipcMain.handle("pty:create", (e, { cols, rows }) => {
+ipcMain.handle("pty:create", (e, { cols, rows, profile, light }) => {
   const win = winOf(e);
   const id = nextId++;
   const banner = path.join(
@@ -393,10 +422,10 @@ ipcMain.handle("pty:create", (e, { cols, rows }) => {
     `pulse-terminal-banner-${id}-${process.pid}.txt`,
   );
   fs.writeFileSync(banner, buildBanner(cpuUsageSince()), "utf8");
-  const r = { p: null, win, cols, rows, queue: [], size: 0, timer: null, unacked: 0, paused: false };
+  const r = { p: null, win, cols, rows, queue: [], size: 0, timer: null, unacked: 0, paused: false, banner, light: !!light };
   ptys.set(id, r);
   try {
-    startShell(id, r, shells.candidates(), 0, banner);
+    startShell(id, r, shells.candidatesFor(profile), 0, banner);
   } catch (err) {
     ptys.delete(id);
     throw err;

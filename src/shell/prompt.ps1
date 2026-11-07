@@ -85,6 +85,9 @@ function script:Test-GitRepo([string]$dir) {
 
 function global:prompt {
   $ok = $?
+  # Tells the app the shell is back at its prompt (ready for typed or pasted input). Written straight to the console, not
+  # returned in the prompt string, so PSReadLine doesn't count it when it measures the line.
+  [Console]::Out.Write("$e]777;ct-prompt$([char]7)")
   $cwd = (Get-Location).Path
   $p = $cwd
   if ($p.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) { $p = '~' + $p.Substring($HOME.Length) }

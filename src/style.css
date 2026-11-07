@@ -109,6 +109,7 @@ button {
   flex: 1;
 }
 #new-tab,
+#profile-btn,
 #settings-btn,
 #quick-btn {
   -webkit-app-region: no-drag;
@@ -119,6 +120,9 @@ button {
   color: var(--muted);
   font-size: 15px;
   cursor: default;
+  /* only the tab strip gives way when the window is narrow; the buttons keep their size and their label on one line */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 #new-tab,
 #settings-btn {
@@ -134,11 +138,94 @@ button {
   font-size: 10px;
   opacity: 0.7;
 }
+#profile-btn {
+  width: 18px;
+  margin-left: -4px;
+}
 #new-tab:hover,
+#profile-btn:hover,
 #settings-btn:hover,
 #quick-btn:hover {
   background: rgba(128, 128, 128, 0.28);
   color: var(--fg);
+}
+
+#profile-menu {
+  position: absolute;
+  top: 48px;
+  left: 12px;
+  min-width: 190px;
+  z-index: 20;
+  border-radius: 10px;
+  padding: 6px;
+  background: var(--bg2);
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.p-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: default;
+}
+.p-item:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+#searchbar {
+  position: absolute;
+  top: 50px;
+  right: 22px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border-radius: 9px;
+  background: var(--bg2);
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+#search-input {
+  width: 190px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12.5px;
+  outline: none;
+}
+#search-input:focus {
+  border-color: var(--accent);
+}
+#search-input.nomatch {
+  border-color: #ff453a;
+}
+#search-count {
+  min-width: 48px;
+  text-align: right;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+#searchbar button {
+  height: 24px;
+  min-width: 26px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: default;
+}
+#searchbar button:hover {
+  background: rgba(128, 128, 128, 0.28);
+  color: var(--fg);
+}
+#searchbar button.on {
+  background: var(--accent);
+  color: #fff;
 }
 
 #terminals {

@@ -669,6 +669,9 @@ let opacity = load("opacity", 100);
 let fontSize = load("fontSize", 14);
 let quick = [...load("quick", QUICK_DEFAULTS)];
 let lineHeight = load("lineHeight", 1.2);
+// lines kept above the screen; each one costs memory (roughly 1 MB per 1000 lines at 120 columns)
+const SCROLLBACKS = [1000, 5000, 10000, 50000, 100000];
+let scrollback = SCROLLBACKS.includes(load("scrollback", 10000)) ? load("scrollback", 10000) : 10000;
 const IS_WIN = window.term.platform === "win32";
 // fonts offered per platform; the first entry is always the bundled one, and an unknown saved name falls back to it
 const FONTS = IS_WIN
@@ -762,8 +765,51 @@ function buildThemeGrid() {
   });
 }
 
+/* ---------- optional addons: find in scrollback, inline images ---------- */
+// Neither is needed to show the first prompt, so their scripts (~160 KB) are loaded once the first tab is up rather than
+// delaying startup, and then attach to every open tab. (An image or Ctrl+Shift+F in the first moments is simply missed.)
+let optionalLoading = null;
+const loadScript = (src) =>
+  new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("could not load " + src));
+    document.head.appendChild(s);
+  });
+function loadOptional() {
+  return (optionalLoading ??= Promise.all([
+    loadScript("../node_modules/@xterm/addon-search/lib/addon-search.js"),
+    loadScript("../node_modules/@xterm/addon-image/lib/addon-image.js"),
+  ])
+    .then(() => tabs.forEach(attachOptional))
+    .catch((err) => console.warn(err.message)));
+}
+function attachOptional(tab) {
+  if (tab.closed) return;
+  if (!tab.search && typeof SearchAddon !== "undefined") {
+    tab.search = new SearchAddon.SearchAddon();
+    tab.term.loadAddon(tab.search);
+    tab.search.onDidChangeResults(({ resultIndex, resultCount }) => {
+      if (tab !== active) return;
+      searchCount.textContent = resultCount ? `${Math.max(0, resultIndex) + 1}/${resultCount}` : "none";
+    });
+  }
+  // sixel and the iTerm2 inline image protocol; the addon draws into the terminal's element, so it needs the terminal opened
+  if (!tab.image && typeof ImageAddon !== "undefined") {
+    try {
+      tab.image = new ImageAddon.ImageAddon({ sixelSupport: true, iipSupport: true, storageLimit: 64 });
+      tab.term.loadAddon(tab.image);
+    } catch (err) {
+      console.warn("inline images unavailable:", err);
+    }
+  }
+}
+
 /* ---------- tabs ---------- */
-async function newTab() {
+const PROFILES = window.term.profiles;
+async function newTab(profileId) {
+  const profile = PROFILES.find((p) => p.id === profileId) || PROFILES[0];
   const pane = document.createElement("div");
   pane.className = "pane";
   termsEl.appendChild(pane);
@@ -776,8 +822,12 @@ async function newTab() {
     cursorBlink: true,
     cursorStyle: "bar",
     allowProposedApi: true,
-    scrollback: 10000,
+    scrollback,
     theme: THEMES[themeIdx].xterm,
+    // programs may ask the terminal for its size in pixels and cells (image tools, TUIs); nothing that moves the window
+    windowOptions: { getWinSizePixels: true, getCellSizePixels: true, getWinSizeChars: true },
+    // OSC 8 hyperlinks (`ls --hyperlink`, `gcc`, `rg`...) open in the browser, web and mail links only
+    linkHandler: { activate: (e, uri) => window.term.openExternal(uri), allowNonHttpProtocols: false },
     // ConPTY reflows the screen itself on resize; without this xterm reflows too and the two fight, losing/misplacing text
     ...(IS_WIN && {
       windowsPty: { backend: "conpty", buildNumber: window.term.winBuild },
@@ -785,7 +835,10 @@ async function newTab() {
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => window.term.openExternal(uri)));
+  // Unicode 11 widths: emoji and other wide symbols take two cells, as the shell and ConPTY count them
+  term.loadAddon(new Unicode11Addon.Unicode11Addon());
+  term.unicode.activeVersion = "11";
   term.open(pane);
   pane.classList.add("active");
   fit.fit();
@@ -796,12 +849,19 @@ async function newTab() {
   el.className = "tab";
   el.draggable = true;
   el.innerHTML = `<span class="label"></span><span class="x">×</span>`;
-  el.querySelector(".label").textContent = `${window.term.shellLabel} ${++tabCount}`;
-  const tab = { id: null, el, pane, term, fit, gl: null, used: 0, parsed: 0, closed: false };
+  el.querySelector(".label").textContent = `${profile === PROFILES[0] ? window.term.shellLabel : profile.label} ${++tabCount}`;
+  const tab = {
+    id: null, el, pane, term, fit, search: null, image: null, profile, gl: null, used: 0, parsed: 0, closed: false,
+    // Keystrokes typed before the shell has drawn its first prompt would be discarded by it; they are held until then.
+    // atPrompt: an integrated shell is idle at its prompt (decides how multi-line pastes are sent)
+    ready: false, pending: [], atPrompt: false, sync: null, syncTimer: 0,
+  };
   tabs.push(tab);
   tabsEl.appendChild(el);
+  installTerminalReplies(tab);
+  attachOptional(tab); // does nothing until the optional addons have loaded; they then attach to every tab
 
-  term.onData((d) => window.term.write(tab.id, d));
+  term.onData((d) => sendInput(tab, d));
   // right-click / menu pastes arrive as native paste events; route them through pasteText too
   pane.addEventListener(
     "paste",
@@ -833,6 +893,11 @@ async function newTab() {
   });
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
+    if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === "KeyF") {
+      e.preventDefault();
+      openSearch();
+      return false;
+    }
     if (
       e.ctrlKey &&
       !e.altKey &&
@@ -851,7 +916,7 @@ async function newTab() {
     // ESC+CR (Alt+Enter) is bound to a "new line" action in the prompt scripts (src/shell)
     if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "Enter") {
       e.preventDefault(); // suppresses the keypress event, which xterm would otherwise turn into a plain Enter
-      window.term.write(tab.id, "\x1b\r");
+      sendInput(tab, "\x1b\r");
       return false;
     }
     return true;
@@ -874,9 +939,12 @@ async function newTab() {
   select(tab);
 
   const { cols, rows } = term;
-  const id = await window.term.create(cols, rows);
+  const id = await window.term.create(cols, rows, profile.id, isLight(THEMES[themeIdx].ui.bg));
   if (tab.closed) return window.term.kill(id); // closed before the shell was ready
   tab.id = id;
+  // shells that report their prompt are waited for (with a time limit); the others can take input at once
+  if (profile.integrated) setTimeout(() => markReady(tab), READY_TIMEOUT);
+  else markReady(tab);
   sent = { cols, rows };
   // the tab was resized while the shell was starting
   if (term.cols !== cols || term.rows !== rows) {
@@ -905,18 +973,197 @@ tabsEl.addEventListener("dragover", (e) => {
 });
 tabsEl.addEventListener("drop", (e) => e.preventDefault());
 
-// A raw newline would run the pasted line immediately.
+/* ---------- input to the shell ---------- */
+const READY_TIMEOUT = 4000; // a shell that never reports its prompt gets its input after this long
+const READY_SETTLE = 40; // PSReadLine takes over the console just after the prompt is drawn
+
+function markReady(tab) {
+  if (tab.ready || tab.closed || tab.id == null) return;
+  tab.ready = true;
+  if (tab.pending.length) {
+    const d = tab.pending.join("");
+    tab.pending = [];
+    window.term.write(tab.id, d);
+  }
+}
+
+// Everything the user types, pastes or drops goes through here
+function sendInput(tab, d) {
+  if (!tab.ready) return void tab.pending.push(d);
+  // an Enter that is not part of an ESC+CR line break leaves the prompt; the next prompt marker brings it back
+  if (tab.profile.integrated && d.includes("\r") && /(^|[^\x1b])\r/.test(d)) tab.atPrompt = false;
+  window.term.write(tab.id, d);
+}
+
+// Control characters other than tab and line breaks have no business in pasted text: ESC could end a bracketed paste
+// early and run the rest as typed commands, and ^C, ^D, ^Z and the like would act on the shell.
+const PASTE_CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+const PASTE_WARN = 50 * 1024;
+
 function pasteText(tab, text) {
-  if (IS_WIN) {
-    // Alt+Enter (AddLine in src/shell/prompt.ps1) just starts a new line
-    window.term.write(
-      tab.id,
-      text.replace(/(\r\n|\r|\n)+$/, "").replace(/\r\n|\r|\n/g, "\x1b\r"),
-    );
+  text = text.replace(PASTE_CONTROLS, "");
+  if (!text) return;
+  if (text.length > PASTE_WARN) {
+    const kb = Math.round(text.length / 1024);
+    const lines = text.split(/\r\n|\r|\n/).length;
+    if (!confirm(`Paste ${kb} KB (${lines} lines) into the terminal?`)) return;
+  }
+  // Windows PowerShell 5.1 has no bracketed paste: at its prompt a newline would run the line, so lines are joined with
+  // Alt+Enter (AddLine in src/shell/prompt.ps1), which just starts a new line. Anywhere else (a REPL, ssh, another
+  // shell, a full-screen program) that key means nothing, so the text goes in as typed. term.paste() sends plain
+  // carriage returns, or brackets the text when the program asked for bracketed paste (bash, zsh, fish, pwsh 7, vim).
+  if (IS_WIN && tab.profile.integrated && tab.atPrompt && !tab.term.modes.bracketedPasteMode) {
+    sendInput(tab, text.replace(/(\r\n|\r|\n)+$/, "").replace(/\r\n|\r|\n/g, "\x1b\r"));
   } else {
-    // bash, zsh and fish turn on bracketed paste, which xterm uses here so pasted newlines don't run anything
     tab.term.paste(text);
   }
+}
+
+/* ---------- files dropped onto the window: their paths are typed at the prompt ---------- */
+const quotePath = (p) => (/[\s&()[\]{}^=;!'+,`~@#$%]/.test(p) ? `"${p}"` : p);
+function dropFiles(files) {
+  if (!active || !files.length) return;
+  const paths = [];
+  for (const f of files) {
+    try {
+      const p = window.term.pathOf(f);
+      if (p) paths.push(quotePath(p));
+    } catch {}
+  }
+  if (paths.length) {
+    sendInput(active, paths.join(" ") + " ");
+    active.term.focus();
+  }
+}
+// A drop anywhere must never navigate the window to the dropped file
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  if (e.dataTransfer?.files?.length) dropFiles(e.dataTransfer.files);
+});
+
+/* ---------- answers to what programs ask the terminal ---------- */
+const hex2 = (n) => n.toString(16).padStart(2, "0");
+// X11 colour spec with 16-bit channels, as terminals reply to colour queries
+const rgbSpec = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return "rgb:" + [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => hex2(v).repeat(2)).join("/");
+};
+const isLight = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 140;
+};
+const CUBE = [0, 95, 135, 175, 215, 255];
+function paletteColor(i) {
+  const a = THEMES[themeIdx].xterm;
+  if (i < 16) {
+    const nm = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"][i & 7];
+    return i < 8 ? a[nm] : a["bright" + nm[0].toUpperCase() + nm.slice(1)];
+  }
+  if (i < 232) {
+    const k = i - 16;
+    return "#" + [CUBE[Math.floor(k / 36)], CUBE[Math.floor(k / 6) % 6], CUBE[k % 6]].map(hex2).join("");
+  }
+  const g = 8 + (i - 232) * 10;
+  return "#" + hex2(g).repeat(3);
+}
+const dynamicColor = (n) => {
+  const u = THEMES[themeIdx].ui;
+  return n === 10 ? u.fg : n === 11 ? u.bg : u.accent;
+};
+
+function installTerminalReplies(tab) {
+  const { term } = tab;
+  // (tab.rawSend is only set by tests, to capture replies)
+  const reply = (s) => (tab.rawSend ? tab.rawSend(s) : tab.id != null && window.term.write(tab.id, s));
+  // OSC 10/11/12 ; ? : foreground, background and cursor colour (how vim, bat, delta... tell dark from light themes)
+  for (const base of [10, 11, 12])
+    term.parser.registerOscHandler(base, (data) => {
+      const parts = data.split(";");
+      if (!parts.every((p) => p === "?")) return false; // setting a colour: left to xterm
+      parts.forEach((_, i) => reply(`\x1b]${base + i};${rgbSpec(dynamicColor(base + i))}\x1b\\`));
+      return true;
+    });
+  // OSC 4 ; index ; ? : palette entries
+  term.parser.registerOscHandler(4, (data) => {
+    const parts = data.split(";");
+    if (parts.length % 2 || !parts.every((p, i) => (i % 2 ? p === "?" : /^\d+$/.test(p) && +p < 256))) return false;
+    for (let i = 0; i < parts.length; i += 2) reply(`\x1b]4;${parts[i]};${rgbSpec(paletteColor(+parts[i]))}\x1b\\`);
+    return true;
+  });
+  // XTVERSION: which terminal is this
+  term.parser.registerCsiHandler({ prefix: ">", final: "q" }, (params) => {
+    if (params[0]) return false;
+    reply(`\x1bP>|PulseTerminal ${window.term.version}\x1b\\`);
+    return true;
+  });
+  // DECRQM for synchronized output (see ingest()): supported, currently off
+  term.parser.registerCsiHandler({ prefix: "?", intermediates: "$", final: "p" }, (params) => {
+    if (params[0] !== 2026) return false;
+    reply("\x1b[?2026;2$y");
+    return true;
+  });
+  // the shell reports its prompt (src/shell/prompt.ps1)
+  term.parser.registerOscHandler(777, (data) => {
+    if (data !== "ct-prompt") return false;
+    tab.atPrompt = true;
+    if (!tab.ready) setTimeout(() => markReady(tab), READY_SETTLE);
+    return true;
+  });
+}
+
+/* ---------- output: synchronized updates (mode 2026) ---------- */
+// Full-screen programs wrap each redraw in ESC[?2026h ... ESC[?2026l. Holding the output in between shows the finished
+// frame instead of a half-drawn one (no flicker or tearing). The hold is capped so a program that never ends the update
+// can't freeze the tab. A marker split across two chunks is simply not recognised, which just means no hold.
+const SYNC_ON = "\x1b[?2026h",
+  SYNC_OFF = "\x1b[?2026l",
+  SYNC_MAX_BYTES = 1 << 20,
+  SYNC_MAX_MS = 150;
+
+function ingest(tab, d) {
+  for (;;) {
+    if (!tab.sync) {
+      const i = d.indexOf(SYNC_ON);
+      if (i < 0) return emit(tab, d); // the usual case: one scan, then straight through
+      if (i > 0) emit(tab, d.slice(0, i));
+      tab.sync = [];
+      tab.syncSize = 0;
+      tab.syncTimer = setTimeout(() => endSync(tab), SYNC_MAX_MS);
+      d = d.slice(i);
+    }
+    const j = d.indexOf(SYNC_OFF);
+    if (j < 0) {
+      tab.sync.push(d);
+      tab.syncSize += d.length;
+      if (tab.syncSize > SYNC_MAX_BYTES) endSync(tab);
+      return;
+    }
+    tab.sync.push(d.slice(0, j + SYNC_OFF.length));
+    endSync(tab);
+    d = d.slice(j + SYNC_OFF.length);
+    if (!d) return;
+  }
+}
+
+function endSync(tab) {
+  if (!tab.sync) return;
+  clearTimeout(tab.syncTimer);
+  const held = tab.sync.join("");
+  tab.sync = null;
+  emit(tab, held);
+}
+
+// Hands output to xterm and tells the main process how much has been parsed (its flow control depends on that)
+function emit(tab, d) {
+  if (tab.closed) return;
+  tab.term.write(d, () => {
+    tab.parsed += d.length;
+    if (tab.parsed >= ACK_EVERY) {
+      window.term.ack(tab.id, tab.parsed);
+      tab.parsed = 0;
+    }
+  });
 }
 
 // Clicking inside the line being typed moves the cursor there by sending the right number of arrow keys.
@@ -954,10 +1201,7 @@ function enableClickToMove(term, pane, tab) {
     const delta =
       row * term.cols + col - (buf.cursorY * term.cols + buf.cursorX);
     if (delta)
-      window.term.write(
-        tab.id,
-        (delta > 0 ? "\x1b[C" : "\x1b[D").repeat(Math.abs(delta)),
-      );
+      sendInput(tab, (delta > 0 ? "\x1b[C" : "\x1b[D").repeat(Math.abs(delta)));
   });
 }
 
@@ -990,6 +1234,7 @@ function select(tab) {
     t.el.classList.toggle("active", t === tab);
     t.pane.classList.toggle("active", t === tab);
   });
+  closeSearch();
   tab.fit.fit();
   tab.used = ++useSeq;
   attachGl(tab);
@@ -1018,14 +1263,7 @@ function closeTab(tab) {
 const ACK_EVERY = 64 * 1024;
 window.term.onData((id, d) => {
   const t = tabs.find((t) => t.id === id);
-  if (!t) return;
-  t.term.write(d, () => {
-    t.parsed += d.length;
-    if (t.parsed >= ACK_EVERY) {
-      window.term.ack(id, t.parsed);
-      t.parsed = 0;
-    }
-  });
+  if (t) ingest(t, d);
 });
 window.term.onExit((id) => {
   const t = tabs.find((t) => t.id === id);
@@ -1135,7 +1373,7 @@ function saveQuick() {
 // Types the command at the prompt without pressing Enter.
 function pasteCommand(cmd) {
   if (!active) return;
-  window.term.write(active.id, cmd);
+  sendInput(active, cmd);
   active.term.focus();
 }
 
@@ -1166,6 +1404,124 @@ document.addEventListener("mousedown", (e) => {
     menu.classList.add("hidden");
 });
 
+/* ---------- find in scrollback (Ctrl+Shift+F) ---------- */
+const searchBar = $("searchbar"),
+  searchInput = $("search-input"),
+  searchCount = $("search-count");
+const searchOpts = { caseSensitive: false, regex: false };
+const decorations = () => {
+  const a = THEMES[themeIdx].ui.accent;
+  return {
+    matchBackground: "#555555",
+    matchBorder: "#888888",
+    matchOverviewRuler: "#888888",
+    activeMatchBackground: a,
+    activeMatchBorder: "#ffffff",
+    activeMatchColorOverviewRuler: a,
+  };
+};
+function runSearch(dir, incremental) {
+  const s = active?.search;
+  if (!s) return;
+  const q = searchInput.value;
+  if (!q) {
+    s.clearDecorations();
+    searchCount.textContent = "";
+    searchInput.classList.remove("nomatch");
+    return;
+  }
+  const o = { ...searchOpts, decorations: decorations(), incremental };
+  const found = dir < 0 ? s.findPrevious(q, o) : s.findNext(q, o);
+  searchInput.classList.toggle("nomatch", !found);
+  if (!found) searchCount.textContent = "none";
+}
+function openSearch() {
+  if (!active) return;
+  if (!active.search) return void loadOptional().then(() => active?.search && openSearch());
+  const sel = active.term.getSelection();
+  if (sel && !sel.includes("\n")) searchInput.value = sel.slice(0, 200);
+  searchBar.classList.remove("hidden");
+  searchInput.focus();
+  searchInput.select();
+  if (searchInput.value) runSearch(1, true);
+}
+function closeSearch() {
+  if (searchBar.classList.contains("hidden")) return;
+  searchBar.classList.add("hidden");
+  for (const t of tabs) t.search?.clearDecorations();
+  searchCount.textContent = "";
+  active?.term.focus();
+}
+searchInput.addEventListener("input", () => runSearch(1, true));
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    runSearch(e.shiftKey ? -1 : 1, false);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeSearch();
+  }
+});
+$("search-next").onclick = () => runSearch(1, false);
+$("search-prev").onclick = () => runSearch(-1, false);
+$("search-close").onclick = closeSearch;
+for (const [id, key] of [["search-case", "caseSensitive"], ["search-regex", "regex"]])
+  $(id).onclick = (e) => {
+    searchOpts[key] = !searchOpts[key];
+    e.currentTarget.classList.toggle("on", searchOpts[key]);
+    // the addon caches its match total per search term, so a changed option needs the cache dropped to be counted again
+    active?.search?.clearDecorations();
+    runSearch(1, true);
+  };
+
+/* ---------- new tab with a chosen shell ---------- */
+const profileMenu = $("profile-menu");
+if (PROFILES.length > 1) {
+  $("profile-btn").classList.remove("hidden");
+  for (const p of PROFILES) {
+    const row = document.createElement("div");
+    row.className = "p-item";
+    row.textContent = p.label;
+    row.onclick = () => {
+      profileMenu.classList.add("hidden");
+      newTab(p.id);
+    };
+    profileMenu.appendChild(row);
+  }
+  $("profile-btn").onclick = (e) => {
+    e.stopPropagation();
+    profileMenu.classList.toggle("hidden");
+    if (profileMenu.classList.contains("hidden")) return;
+    // open right under the button, kept inside the window
+    const b = e.currentTarget.getBoundingClientRect();
+    const w = profileMenu.offsetWidth;
+    profileMenu.style.left = Math.max(8, Math.min(b.left - 8, window.innerWidth - w - 8)) + "px";
+    profileMenu.style.top = b.bottom + 6 + "px";
+  };
+  document.addEventListener("mousedown", (e) => {
+    if (!profileMenu.contains(e.target) && e.target.closest("#profile-btn") === null)
+      profileMenu.classList.add("hidden");
+  });
+}
+
+/* ---------- scrollback size ---------- */
+const sbSel = $("scrollback");
+for (const n of SCROLLBACKS) {
+  const o = document.createElement("option");
+  o.value = n;
+  // (no toLocaleString: its first use initialises the locale machinery, which costs milliseconds at every startup)
+  o.textContent = String(n).replace(/\B(?=(\d{3})+$)/g, ",") + " lines" + (n === 10000 ? " (default)" : "");
+  sbSel.appendChild(o);
+}
+sbSel.value = scrollback;
+function setScrollback(n, remote) {
+  if (!SCROLLBACKS.includes(n)) return;
+  scrollback = n;
+  if (!remote) save("scrollback", n);
+  tabs.forEach((t) => (t.term.options.scrollback = n));
+}
+sbSel.onchange = () => setScrollback(Number(sbSel.value));
+
 /* ---------- settings + window controls ---------- */
 const settings = $("settings");
 const closeSettings = () => {
@@ -1180,7 +1536,7 @@ $("settings-close").onclick = closeSettings;
 settings.addEventListener("mousedown", (e) => {
   if (e.target === settings) closeSettings();
 });
-$("new-tab").onclick = newTab;
+$("new-tab").onclick = () => newTab();
 $("w-close").onclick = () => window.term.close();
 const opSlider = $("opacity");
 opSlider.value = opacity;
@@ -1210,12 +1566,16 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeSettings();
     menu.classList.add("hidden");
+    profileMenu.classList.add("hidden");
     return;
   }
   if (!e.ctrlKey) return;
   if (e.code === "KeyT") {
     e.preventDefault();
     newTab();
+  } else if (e.code === "KeyF" && e.shiftKey) {
+    e.preventDefault();
+    openSearch();
   } else if (e.code === "KeyW") {
     e.preventDefault();
     if (active) closeTab(active);
@@ -1254,6 +1614,9 @@ window.term.onSetting((k, v) => {
       setFontFamily(i, true);
       fontSel.value = i;
     }
+  } else if (k === "scrollback") {
+    setScrollback(v, true);
+    sbSel.value = scrollback;
   } else if (k === "quick" && Array.isArray(v)) {
     quick = [...v];
     renderQuick();
@@ -1270,4 +1633,5 @@ window.term.onSetting((k, v) => {
     ),
   ).catch(() => {});
   newTab();
+  requestIdleCallback(loadOptional, { timeout: 2000 });
 })();

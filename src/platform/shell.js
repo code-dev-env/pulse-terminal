@@ -84,6 +84,41 @@ function windowsCandidates() {
   return out;
 }
 
+const firstExisting = (files) => files.find((f) => f && fs.existsSync(f)) || null;
+
+// Extra shells offered in the new-tab menu. `integrated` shells load src/shell/prompt.ps1, which tells the app when the
+// prompt is ready (see the ct-prompt marker in renderer.js); the others are started as they are.
+function windowsProfiles() {
+  const sys = path.join(process.env.SystemRoot || "C:\\Windows", "System32");
+  const pf = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs")];
+  const list = [{ id: "default", label: "PowerShell", integrated: true, specs: windowsCandidates() }];
+  if (findPwsh())
+    list.push({
+      id: "winps",
+      label: "Windows PowerShell",
+      integrated: true,
+      specs: [{ label: "PowerShell", file: "powershell.exe", args: powershellArgs() }],
+    });
+  list.push({
+    id: "cmd",
+    label: "Command Prompt",
+    integrated: false,
+    specs: [{ label: "cmd", file: path.join(sys, "cmd.exe"), args: [] }],
+  });
+  const wsl = firstExisting([path.join(sys, "wsl.exe")]);
+  if (wsl)
+    list.push({ id: "wsl", label: "WSL", integrated: false, specs: [{ label: "wsl", file: wsl, args: ["--cd", "~"] }] });
+  const bash = firstExisting(pf.filter(Boolean).map((d) => path.join(d, "Git", "bin", "bash.exe")));
+  if (bash)
+    list.push({
+      id: "gitbash",
+      label: "Git Bash",
+      integrated: false,
+      specs: [{ label: "bash", file: bash, args: ["--login", "-i"] }],
+    });
+  return list;
+}
+
 /* ---------- Linux ---------- */
 
 const isExecutable = (f) => {
@@ -173,16 +208,40 @@ function candidates() {
 // Name shown on new tabs until the shell sets its own title
 const label = () => (isWin ? "PowerShell" : (candidates()[0]?.label ?? "Terminal"));
 
+let profileList = null;
+const allProfiles = () =>
+  (profileList ??= isWin
+    ? windowsProfiles()
+    : [{ id: "default", label: label(), integrated: false, specs: candidates() }]);
+
+// What the renderer is told about (no file paths): id, label and whether the shell reports its prompt
+const profiles = () => allProfiles().map(({ id, label, integrated }) => ({ id, label, integrated }));
+
+// Shell specs for a profile id; an unknown id (the renderer is untrusted input) falls back to the default profile
+const candidatesFor = (id) => (allProfiles().find((p) => p.id === id) || allProfiles()[0]).specs;
+
 // Environment for a shell: when launched from an AppImage or a desktop entry the app's own variables would otherwise leak
 // into every program started from the terminal.
 const LEAKY = ["APPIMAGE", "APPDIR", "ARGV0", "OWD", "CHROME_DESKTOP", "ELECTRON_RUN_AS_NODE"];
-function env(spec, banner) {
+function env(spec, banner, light) {
   const e = { ...process.env, CT_BANNER: banner };
-  if (!isWin) {
-    for (const k of LEAKY) delete e[k];
-    e.COLORTERM ??= "truecolor";
-  }
+  if (!isWin) for (const k of LEAKY) delete e[k];
+  // Programs pick truecolor and per-terminal quirks from these (Windows Terminal sets WT_SESSION in the same spirit).
+  // COLORFGBG ("foreground;background" palette indexes) is how vim and others tell a light theme from a dark one; the
+  // colour query they would otherwise use (OSC 11) can't get its reply back through Windows' ConPTY.
+  e.COLORFGBG = light ? "0;15" : "15;0";
+  e.COLORTERM ??= "truecolor";
+  e.TERM_PROGRAM = "PulseTerminal";
+  e.TERM_PROGRAM_VERSION = version();
   return Object.assign(e, spec.env);
 }
 
-module.exports = { candidates, label, env, cleanup };
+function version() {
+  try {
+    return require("electron").app.getVersion();
+  } catch {
+    return "";
+  }
+}
+
+module.exports = { candidates, candidatesFor, profiles, label, env, cleanup };

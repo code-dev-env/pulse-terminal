@@ -2,6 +2,10 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <title>Pulse Terminal</title>
     <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
     <link rel="stylesheet" href="style.css" />
@@ -19,6 +23,20 @@
     <div id="titlebar">
       <div id="tabs"></div>
       <button id="new-tab" title="New tab (Ctrl+T)">+</button>
+      <button id="profile-btn" class="hidden" title="New tab with…">
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M1 2.5l3 3 3-3" />
+        </svg>
+      </button>
       <div id="drag-fill"></div>
       <button id="quick-btn" title="Quick commands">
         Quick commands
@@ -113,7 +131,19 @@
       </div>
     </div>
 
+    <div id="profile-menu" class="hidden"></div>
+
     <div id="terminals"></div>
+
+    <div id="searchbar" class="hidden">
+      <input id="search-input" placeholder="Find" spellcheck="false" />
+      <span id="search-count"></span>
+      <button id="search-case" title="Match case">Aa</button>
+      <button id="search-regex" title="Regular expression">.*</button>
+      <button id="search-prev" title="Previous (Shift+Enter)">↑</button>
+      <button id="search-next" title="Next (Enter)">↓</button>
+      <button id="search-close" title="Close (Esc)">✕</button>
+    </div>
 
     <div id="settings" class="hidden">
       <div class="sheet">
@@ -149,6 +179,10 @@
           />
           <span id="line-height-val">1.2</span>
         </div>
+        <h3>Scrollback</h3>
+        <div class="slider-row">
+          <select id="scrollback"></select>
+        </div>
         <h3>Theme</h3>
         <div id="theme-grid"></div>
       </div>
@@ -158,6 +192,9 @@
     <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
     <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
     <script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
+    <script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+    <!-- addon-search and addon-image are loaded by renderer.js once the first prompt is up: they aren't needed to start -->
+
     <script src="renderer.js"></script>
   </body>
 </html>
